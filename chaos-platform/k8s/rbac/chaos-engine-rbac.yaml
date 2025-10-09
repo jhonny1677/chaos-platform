@@ -1,0 +1,78 @@
+# =============================================================================
+# RBAC — chaos-engine
+#
+# The chaos engine needs cluster-wide visibility to discover pods across all
+# namespaces and the ability to delete them to simulate failures.
+# Node listing is needed to correlate pod failures with node health.
+# Write access is intentionally kept minimal — only pod deletion, no creation.
+# =============================================================================
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: chaos-engine-sa
+  namespace: chaos-engine
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+    app.kubernetes.io/component: chaos-engine
+  annotations:
+    # IRSA: uncomment and set the ARN from `terraform output chaos_engine_role_arn`
+    # SECRET_REF: eks.amazonaws.com/role-arn: <chaos_engine_role_arn>
+    eks.amazonaws.com/role-arn: "REPLACE_WITH_CHAOS_ENGINE_ROLE_ARN"
+    description: "Service account for the chaos engine pod; bound to AWS IAM via IRSA"
+automountServiceAccountToken: true
+
+---
+# ClusterRole grants permissions across ALL namespaces so the chaos engine
+# can target pods in target-app, load-tester, and any future namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: chaos-engine-role
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+    app.kubernetes.io/component: chaos-engine
+  annotations:
+    description: "Cluster-wide read on pods/nodes/deployments; delete on pods only"
+rules:
+  # Pod management — list to discover targets, delete to inject failure
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "delete"]
+
+  # Pod logs — needed for pre/post failure diagnostics
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+
+  # Node info — correlate pod failures with node health metrics
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
+
+  # Deployment info — track replica counts before and after chaos runs
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets"]
+    verbs: ["get", "list", "watch"]
+
+  # Events — write chaos experiment events for audit trail
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: chaos-engine-binding
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+    app.kubernetes.io/component: chaos-engine
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: chaos-engine-role
+subjects:
+  - kind: ServiceAccount
+    name: chaos-engine-sa
+    namespace: chaos-engine

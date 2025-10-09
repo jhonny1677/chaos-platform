@@ -1,0 +1,55 @@
+# =============================================================================
+# STORAGE CLASSES — AWS EBS backed persistent storage
+#
+# Two tiers:
+#   gp3-fast   — gp3 NVMe SSD, baseline 3000 IOPS / 125 MiB/s throughput
+#                Use for: Prometheus, PostgreSQL, anything latency-sensitive
+#   gp2-standard — gp2 general purpose SSD (older, IOPS tied to volume size)
+#                Use for: Loki cold storage, Grafana dashboards, Jenkins workspace
+#
+# Both use the AWS EBS CSI driver (ebs.csi.aws.com) which is pre-installed
+# on EKS clusters >= 1.23 via a managed add-on.
+#
+# WaitForFirstConsumer: volume is provisioned in the same AZ as the pod that
+# claims it — critical for EBS which is AZ-scoped. Immediate would randomly
+# pick an AZ and the pod might get scheduled elsewhere causing a mount failure.
+# =============================================================================
+
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: gp3-fast
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+    app.kubernetes.io/component: storage
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "true"
+    description: "gp3 EBS SSD — high IOPS, low latency. Default storage class."
+provisioner: ebs.csi.aws.com
+volumeBindingMode: WaitForFirstConsumer
+reclaimPolicy: Retain            # Retain data after PVC is deleted (safety net)
+allowVolumeExpansion: true       # Allow online volume resize without pod restart
+parameters:
+  type: gp3
+  iops: "3000"                   # Baseline; can be raised to 16000 for prod
+  throughput: "125"              # MiB/s; can be raised to 1000 for prod
+  encrypted: "true"              # Encrypt all volumes at rest using AWS KMS
+  # SECRET_REF: kmsKeyId: <aws_kms_key_arn>  # optional: use a custom KMS key
+
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: gp2-standard
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+    app.kubernetes.io/component: storage
+  annotations:
+    description: "gp2 EBS SSD — general purpose, IOPS scale with volume size"
+provisioner: ebs.csi.aws.com
+volumeBindingMode: WaitForFirstConsumer
+reclaimPolicy: Retain
+allowVolumeExpansion: true
+parameters:
+  type: gp2
+  encrypted: "true"

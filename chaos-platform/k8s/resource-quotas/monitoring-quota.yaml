@@ -1,0 +1,84 @@
+# =============================================================================
+# RESOURCE QUOTA + LIMIT RANGE — monitoring namespace
+#
+# Prometheus, Grafana, Loki, and AlertManager all live here. Prometheus with
+# 15-day retention and 50Gi storage is the largest consumer. The quota is
+# capped at 4 CPU / 8Gi to keep costs predictable on a student cluster.
+# =============================================================================
+
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: monitoring-quota
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+    app.kubernetes.io/component: monitoring
+  annotations:
+    description: "Hard resource ceiling for the monitoring namespace"
+spec:
+  hard:
+    # Compute
+    requests.cpu: "2"
+    requests.memory: "4Gi"
+    limits.cpu: "4"
+    limits.memory: "8Gi"
+
+    # Workloads — monitoring stack has many components (prometheus, grafana,
+    # alertmanager, loki, promtail, otel-collector, kube-state-metrics, etc.)
+    pods: "20"
+    count/deployments.apps: "10"
+    count/statefulsets.apps: "5"
+    count/daemonsets.apps: "3"
+
+    # Storage — Prometheus (50Gi) + Grafana (10Gi) + Loki (50Gi) = 110Gi
+    requests.storage: "120Gi"
+    persistentvolumeclaims: "10"
+
+    # Services
+    services: "20"
+    services.loadbalancers: "1"    # external LB for Grafana
+    services.nodeports: "0"
+
+    # Config
+    count/configmaps: "30"
+    count/secrets: "20"
+
+---
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: monitoring-limits
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+    app.kubernetes.io/component: monitoring
+  annotations:
+    description: "Default resource requests and limits for pods in monitoring"
+spec:
+  limits:
+    - type: Container
+      default:
+        cpu: "500m"
+        memory: "1Gi"
+      defaultRequest:
+        cpu: "200m"
+        memory: "256Mi"
+      max:
+        cpu: "2"
+        memory: "4Gi"
+      min:
+        cpu: "50m"
+        memory: "64Mi"
+
+    # PVCs — set a ceiling so a misconfigured Helm chart can't claim 1Ti
+    - type: PersistentVolumeClaim
+      max:
+        storage: "60Gi"
+      min:
+        storage: "1Gi"
+
+    - type: Pod
+      max:
+        cpu: "3"
+        memory: "6Gi"

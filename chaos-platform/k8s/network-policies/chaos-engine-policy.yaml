@@ -1,0 +1,72 @@
+# =============================================================================
+# NETWORK POLICY — chaos-engine specific rules
+#
+# The chaos engine needs two outbound paths beyond DNS:
+# 1. Kubernetes API server (port 443) — to list/delete pods via kubectl/client-go
+# 2. AWS APIs (port 443) — for IRSA token exchange and CloudWatch/S3/DynamoDB
+#
+# The API server is reachable via the internal `kubernetes` ClusterIP service
+# in the `default` namespace AND via the EKS public endpoint. Both use port 443.
+# Since the destination IP is dynamic (EKS assigns it), we allow egress to
+# any destination on 443 rather than lock it to an IP that can change.
+# =============================================================================
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: chaos-engine-allow-api-server
+  namespace: chaos-engine
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+    app.kubernetes.io/component: chaos-engine
+  annotations:
+    description: "Allow chaos engine to call the Kubernetes API and AWS APIs"
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: chaos-engine
+  policyTypes:
+    - Egress
+  egress:
+    # Kubernetes API server (in-cluster via default/kubernetes service + EKS endpoint)
+    - ports:
+        - port: 443
+          protocol: TCP
+
+    # Kafka egress — chaos engine publishes experiment events to Kafka
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kafka
+      ports:
+        - port: 9092
+          protocol: TCP
+
+---
+# Allow other namespaces to receive chaos (ingress from chaos-engine).
+# target-app must accept pod deletions triggered by the Kubernetes API,
+# but that traffic goes through the API server, not directly pod-to-pod.
+# This policy allows chaos-engine to probe target-app health before/after kills.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-from-chaos-engine
+  namespace: target-app
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+    app.kubernetes.io/component: network-policy
+  annotations:
+    description: "Allow chaos-engine health checks into target-app"
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: chaos-engine
+      ports:
+        - port: 8080
+          protocol: TCP
+        - port: 80
+          protocol: TCP

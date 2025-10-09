@@ -1,0 +1,470 @@
+# =============================================================================
+# HELMFILE — chaos engineering platform
+#
+# Install order matters. helmfile respects `needs:` dependencies and installs
+# releases in topological order. Run with:
+#
+#   helmfile sync              # install/upgrade all releases
+#   helmfile apply             # diff + apply (safer for CI)
+#   helmfile destroy           # remove all releases
+#   helmfile sync -l name=argocd   # target a single release
+#
+# Prerequisites:
+#   brew install helm helmfile
+#   helm plugin install https://github.com/databus23/helm-diff
+#   aws eks update-kubeconfig --region us-east-1 --name chaos-platform-eks
+# =============================================================================
+
+# Helm operation defaults applied to every release unless overridden
+helmDefaults:
+  wait: true               # Wait for pods to be Ready before marking success
+  waitForJobs: true        # Wait for post-install Jobs to complete
+  timeout: 600             # 10-minute timeout per release
+  recreatePods: false      # Don't force-restart pods on config changes
+  force: false
+  cleanupOnFail: true      # Roll back resources if a release fails
+  atomic: true             # Roll back automatically on failure
+
+# ── Helm chart repositories ───────────────────────────────────────────────────
+
+repositories:
+  - name: jetstack
+    url: https://charts.jetstack.io
+
+  - name: metrics-server
+    url: https://kubernetes-sigs.github.io/metrics-server/
+
+  - name: kedacore
+    url: https://kedacore.github.io/charts
+
+  - name: argoproj
+    url: https://argoproj.github.io/argo-helm
+
+  - name: prometheus-community
+    url: https://prometheus-community.github.io/helm-charts
+
+  - name: grafana
+    url: https://grafana.github.io/helm-charts
+
+  - name: hashicorp
+    url: https://helm.releases.hashicorp.com
+
+  - name: sealed-secrets
+    url: https://bitnami-labs.github.io/sealed-secrets
+
+  - name: bitnami
+    url: https://charts.bitnami.com/bitnami    # used for the 'raw' chart (ClusterIssuer)
+
+# ── Releases ──────────────────────────────────────────────────────────────────
+
+releases:
+
+  # ── 1. cert-manager ──────────────────────────────────────────────────────
+  # Manages TLS certificates. Must be installed first — other charts depend on
+  # CRDs it provides (Certificate, ClusterIssuer, etc.).
+  - name: cert-manager
+    namespace: security
+    chart: jetstack/cert-manager
+    version: "v1.13.0"
+    createNamespace: false    # namespace created by k8s/namespaces/namespaces.yaml
+    values:
+      - installCRDs: true     # install cert-manager CRDs in the same Helm release
+        global:
+          leaderElection:
+            namespace: security
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+        webhook:
+          resources:
+            requests:
+              cpu: 20m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+        cainjector:
+          resources:
+            requests:
+              cpu: 20m
+              memory: 64Mi
+            limits:
+              cpu: 100m
+              memory: 256Mi
+        podLabels:
+          app.kubernetes.io/part-of: chaos-platform
+
+  # ── 2. metrics-server ────────────────────────────────────────────────────
+  # Provides resource metrics (kubectl top, HPA). Required by KEDA and HPA.
+  - name: metrics-server
+    namespace: kube-system
+    chart: metrics-server/metrics-server
+    createNamespace: false
+    values:
+      - args:
+          - --kubelet-insecure-tls    # EKS nodes use self-signed certs
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+        podLabels:
+          app.kubernetes.io/part-of: chaos-platform
+
+  # ── 3. KEDA ──────────────────────────────────────────────────────────────
+  # Kubernetes Event-Driven Autoscaler — scales load-tester workers based on
+  # Kafka consumer lag and custom metrics.
+  - name: keda
+    namespace: keda
+    chart: kedacore/keda
+    createNamespace: true
+    values:
+      - resources:
+          operator:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          metricApiServer:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+        podLabels:
+          app.kubernetes.io/part-of: chaos-platform
+
+  # ── 4. ArgoCD ────────────────────────────────────────────────────────────
+  # GitOps controller. After install, add the GitHub repo in the UI and create
+  # Applications pointing to k8s/ directories.
+  - name: argocd
+    namespace: argocd
+    chart: argoproj/argo-cd
+    createNamespace: false
+    values:
+      - global:
+          podLabels:
+            app.kubernetes.io/part-of: chaos-platform
+        server:
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          extraArgs:
+            - --insecure    # TLS terminated at ingress; remove for prod
+        controller:
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+        repoServer:
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+        configs:
+          secret:
+            # SECRET_REF: argocdServerAdminPassword is set via sealed secret
+            # Generate with: htpasswd -nbBC 10 "" <password> | tr -d ':\n' | sed 's/$2y/$2a/'
+            argocdServerAdminPassword: "REPLACE_WITH_BCRYPT_HASH"
+          params:
+            server.insecure: true
+
+  # ── 5. kube-prometheus-stack ─────────────────────────────────────────────
+  # Installs Prometheus, Grafana, AlertManager, and kube-state-metrics as a
+  # single bundle. This is the core observability release.
+  - name: prometheus-stack
+    namespace: monitoring
+    chart: prometheus-community/kube-prometheus-stack
+    createNamespace: false
+    needs:
+      - kube-system/metrics-server
+    values:
+      - fullnameOverride: prometheus
+        commonLabels:
+          app.kubernetes.io/part-of: chaos-platform
+
+        # Prometheus config
+        prometheus:
+          prometheusSpec:
+            retention: 15d
+            retentionSize: "45GB"
+            storageSpec:
+              volumeClaimTemplate:
+                spec:
+                  storageClassName: gp3-fast
+                  accessModes: ["ReadWriteOnce"]
+                  resources:
+                    requests:
+                      storage: 50Gi
+            resources:
+              requests:
+                cpu: 500m
+                memory: 1Gi
+              limits:
+                cpu: 2000m
+                memory: 4Gi
+            # Scrape all namespaces that have a ServiceMonitor
+            serviceMonitorSelectorNilUsesHelmValues: false
+            podMonitorSelectorNilUsesHelmValues: false
+
+        # Grafana config
+        grafana:
+          enabled: true
+          persistence:
+            enabled: true
+            storageClassName: gp3-fast
+            size: 10Gi
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          adminPassword: "REPLACE_WITH_GRAFANA_ADMIN_PASSWORD"
+          # SECRET_REF: use grafana.admin.existingSecret instead of hardcoding:
+          #   admin:
+          #     existingSecret: grafana-admin-secret
+          #     userKey: admin-user
+          #     passwordKey: admin-password
+          grafana.ini:
+            server:
+              root_url: "https://grafana.chaos-platform.example.com"
+            auth.anonymous:
+              enabled: false
+          sidecar:
+            dashboards:
+              enabled: true
+              searchNamespace: ALL     # auto-load dashboards from any namespace
+
+        # AlertManager config
+        alertmanager:
+          enabled: true
+          alertmanagerSpec:
+            resources:
+              requests:
+                cpu: 50m
+                memory: 64Mi
+              limits:
+                cpu: 200m
+                memory: 256Mi
+          config:
+            global:
+              resolve_timeout: 5m
+            route:
+              group_by: ["alertname", "namespace"]
+              group_wait: 30s
+              group_interval: 5m
+              repeat_interval: 12h
+              receiver: "slack-notifications"
+              routes:
+                - match:
+                    severity: critical
+                  receiver: "slack-notifications"
+            receivers:
+              - name: "slack-notifications"
+                slack_configs:
+                  - api_url: "REPLACE_WITH_SLACK_WEBHOOK_URL"
+                    # SECRET_REF: api_url from AWS Secrets Manager via external-secrets
+                    channel: "#chaos-alerts"
+                    title: "[{{ .Status | toUpper }}] {{ .GroupLabels.alertname }}"
+
+        # kube-state-metrics
+        kube-state-metrics:
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+
+        # node-exporter
+        prometheus-node-exporter:
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+
+  # ── 6. Loki stack ────────────────────────────────────────────────────────
+  # Log aggregation. Promtail runs as a DaemonSet on every node and ships
+  # container logs to Loki. Grafana already installed above reads from Loki.
+  - name: loki-stack
+    namespace: monitoring
+    chart: grafana/loki-stack
+    createNamespace: false
+    needs:
+      - monitoring/prometheus-stack
+    values:
+      - loki:
+          enabled: true
+          persistence:
+            enabled: true
+            storageClassName: gp3-fast
+            size: 50Gi
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 2Gi
+          config:
+            limits_config:
+              retention_period: 720h    # 30 days
+            chunk_store_config:
+              max_look_back_period: 720h
+        promtail:
+          enabled: true
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+          podLabels:
+            app.kubernetes.io/part-of: chaos-platform
+        grafana:
+          enabled: false    # already installed in prometheus-stack release
+
+  # ── 7. Vault ─────────────────────────────────────────────────────────────
+  # Secret management. Dev mode disabled for realistic config. After install:
+  # 1. kubectl exec -n security vault-0 -- vault operator init
+  # 2. kubectl exec -n security vault-0 -- vault operator unseal <key>
+  # 3. Configure AWS auth backend for IRSA-based pod auth
+  - name: vault
+    namespace: security
+    chart: hashicorp/vault
+    createNamespace: false
+    needs:
+      - security/cert-manager
+    values:
+      - global:
+          enabled: true
+          podLabels:
+            app.kubernetes.io/part-of: chaos-platform
+        server:
+          dev:
+            enabled: false    # NEVER use dev mode — it stores secrets in memory only
+          ha:
+            enabled: false    # single-node for dev; enable HA for prod with 3 replicas
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+          dataStorage:
+            enabled: true
+            size: 10Gi
+            storageClass: gp3-fast
+          auditStorage:
+            enabled: true
+            size: 10Gi
+            storageClass: gp3-fast
+          # Vault config — AWS KMS auto-unseal (avoids manual unseal after restarts)
+          # SECRET_REF: Set kmsKeyId via sealed secret or AWS Parameter Store
+          extraConfig: |
+            ui = true
+            seal "awskms" {
+              region     = "us-east-1"
+              kms_key_id = "REPLACE_WITH_KMS_KEY_ID"
+            }
+        ui:
+          enabled: true
+          serviceType: ClusterIP
+
+  # ── 8. Sealed Secrets ────────────────────────────────────────────────────
+  # Encrypts Kubernetes Secrets so they can be safely committed to Git.
+  # The controller holds the private key; only it can decrypt SealedSecrets.
+  - name: sealed-secrets
+    namespace: security
+    chart: sealed-secrets/sealed-secrets
+    createNamespace: false
+    values:
+      - fullnameOverride: sealed-secrets-controller
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+        podLabels:
+          app.kubernetes.io/part-of: chaos-platform
+        # Backup the sealing key immediately after install:
+        # kubectl get secret -n security -l sealedsecrets.bitnami.com/sealed-secrets-key -o yaml > sealing-key-backup.yaml
+        # Store that file in a secure location (NOT in Git)
+
+  # ── 9. cert-manager ClusterIssuer (Let's Encrypt) ────────────────────────
+  # Must run AFTER cert-manager is Ready (CRDs must exist before this release).
+  # Uses the bitnami/raw chart to apply a raw Kubernetes manifest via Helm.
+  # Replace EMAIL with a real address — Let's Encrypt sends expiry notifications.
+  - name: cert-manager-cluster-issuer
+    namespace: security
+    chart: bitnami/raw
+    createNamespace: false
+    needs:
+      - security/cert-manager
+    values:
+      - resources:
+          # Staging issuer — use for testing (no rate limits, untrusted cert)
+          - apiVersion: cert-manager.io/v1
+            kind: ClusterIssuer
+            metadata:
+              name: letsencrypt-staging
+              labels:
+                app.kubernetes.io/part-of: chaos-platform
+            spec:
+              acme:
+                server: https://acme-staging-v02.api.letsencrypt.org/directory
+                email: "REPLACE_WITH_YOUR_EMAIL"
+                # SECRET_REF: email should match a monitored inbox for expiry alerts
+                privateKeySecretRef:
+                  name: letsencrypt-staging-key
+                solvers:
+                  - http01:
+                      ingress:
+                        class: nginx
+
+          # Production issuer — use once staging certs work end-to-end
+          - apiVersion: cert-manager.io/v1
+            kind: ClusterIssuer
+            metadata:
+              name: letsencrypt-prod
+              labels:
+                app.kubernetes.io/part-of: chaos-platform
+            spec:
+              acme:
+                server: https://acme-v02.api.letsencrypt.org/directory
+                email: "REPLACE_WITH_YOUR_EMAIL"
+                privateKeySecretRef:
+                  name: letsencrypt-prod-key
+                solvers:
+                  - http01:
+                      ingress:
+                        class: nginx

@@ -1,0 +1,105 @@
+# =============================================================================
+# PERSISTENT VOLUME CLAIMS
+#
+# PVCs are created here so the Helm charts for each tool can reference
+# existing claims rather than creating their own (which might use wrong
+# storage class or size). Set in the Helm values:
+#   prometheus: server.persistentVolume.existingClaim: prometheus-data
+#   grafana:    persistence.existingClaim: grafana-data
+#   loki:       persistence.existingClaim: loki-data
+#   postgresql: persistence.existingClaim: postgres-data
+#
+# All claims use gp3-fast for low query latency. Loki could use gp2-standard
+# if cost is a concern (Loki reads are infrequent compared to Prometheus).
+# =============================================================================
+
+# ── Prometheus (monitoring namespace) ────────────────────────────────────────
+# 15-day retention at ~1k series with 15s scrape = approx 20–35 Gi.
+# 50Gi gives comfortable headroom for experiments with high cardinality.
+
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: prometheus-data
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+    app.kubernetes.io/component: prometheus
+  annotations:
+    description: "Persistent storage for Prometheus TSDB — 15-day retention"
+spec:
+  accessModes:
+    - ReadWriteOnce          # EBS is single-node mount only
+  storageClassName: gp3-fast
+  resources:
+    requests:
+      storage: 50Gi
+
+---
+# ── Grafana (monitoring namespace) ───────────────────────────────────────────
+# Stores dashboards (if not using ConfigMap provisioning), user preferences,
+# and SQLite database. 10Gi is ample.
+
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: grafana-data
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+    app.kubernetes.io/component: grafana
+  annotations:
+    description: "Persistent storage for Grafana SQLite DB and dashboard cache"
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: gp3-fast
+  resources:
+    requests:
+      storage: 10Gi
+
+---
+# ── Loki (monitoring namespace) ──────────────────────────────────────────────
+# Stores compressed log chunks. 50Gi supports ~30 days of logs at moderate
+# ingestion rates from all 8 namespaces. Loki is very storage-efficient.
+
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: loki-data
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+    app.kubernetes.io/component: loki
+  annotations:
+    description: "Persistent storage for Loki log chunks and index"
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: gp3-fast
+  resources:
+    requests:
+      storage: 50Gi
+
+---
+# ── PostgreSQL (chaos-engine namespace) ──────────────────────────────────────
+# Stores FastAPI backend data: experiment metadata, user configs, audit logs.
+# 20Gi is generous for a dev/student environment.
+
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-data
+  namespace: chaos-engine
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+    app.kubernetes.io/component: postgresql
+  annotations:
+    description: "Persistent storage for PostgreSQL data directory"
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: gp3-fast
+  resources:
+    requests:
+      storage: 20Gi

@@ -1,0 +1,207 @@
+# =============================================================================
+# CONFIGMAPS — platform-wide configuration
+#
+# One ConfigMap per namespace so each component can mount the same logical
+# config without needing cross-namespace access (which is forbidden by the
+# network policies). All values are non-sensitive. Secrets (passwords, keys,
+# tokens) are stored in AWS Secrets Manager and injected by external-secrets.
+#
+# Pods consume this ConfigMap with:
+#   envFrom:
+#     - configMapRef:
+#         name: platform-config
+# =============================================================================
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: platform-config
+  namespace: chaos-engine
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+    app.kubernetes.io/component: config
+  annotations:
+    description: "Shared platform configuration for chaos-engine workloads"
+data:
+  ENVIRONMENT: "dev"
+  PLATFORM_NAME: "chaos-platform"
+  LOG_LEVEL: "INFO"
+  KAFKA_BOOTSTRAP: "kafka-broker.kafka.svc.cluster.local:9092"
+  REDIS_HOST: "redis.load-tester.svc.cluster.local"
+  POSTGRES_HOST: "postgres.chaos-engine.svc.cluster.local"
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: "chaos_platform"
+  # SECRET_REF: POSTGRES_USER and POSTGRES_PASSWORD come from external-secrets
+  PROMETHEUS_URL: "http://prometheus-operated.monitoring.svc.cluster.local:9090"
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector.monitoring.svc.cluster.local:4317"
+  OTEL_SERVICE_NAME: "chaos-engine"
+  AWS_REGION: "us-east-1"
+  S3_REPORTS_BUCKET: "chaos-platform-reports"    # replaced by init container reading terraform output
+  DYNAMODB_TABLE: "chaos-experiments"
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: platform-config
+  namespace: load-tester
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+    app.kubernetes.io/component: config
+  annotations:
+    description: "Shared platform configuration for load-tester workloads"
+data:
+  ENVIRONMENT: "dev"
+  PLATFORM_NAME: "chaos-platform"
+  LOG_LEVEL: "INFO"
+  KAFKA_BOOTSTRAP: "kafka-broker.kafka.svc.cluster.local:9092"
+  REDIS_HOST: "redis.load-tester.svc.cluster.local"
+  POSTGRES_HOST: "postgres.chaos-engine.svc.cluster.local"
+  POSTGRES_PORT: "5432"
+  TARGET_APP_URL: "http://target-app.target-app.svc.cluster.local:8080"
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector.monitoring.svc.cluster.local:4317"
+  OTEL_SERVICE_NAME: "load-tester"
+  AWS_REGION: "us-east-1"
+  # Load test tuning defaults — override per-experiment via job env vars
+  DEFAULT_WORKERS: "10"
+  DEFAULT_DURATION_SECONDS: "300"
+  DEFAULT_RPS: "100"
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: platform-config
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+    app.kubernetes.io/component: config
+  annotations:
+    description: "Shared platform configuration for monitoring workloads"
+data:
+  ENVIRONMENT: "dev"
+  PLATFORM_NAME: "chaos-platform"
+  LOG_LEVEL: "INFO"
+  KAFKA_BOOTSTRAP: "kafka-broker.kafka.svc.cluster.local:9092"
+  REDIS_HOST: "redis.load-tester.svc.cluster.local"
+  POSTGRES_HOST: "postgres.chaos-engine.svc.cluster.local"
+  PROMETHEUS_RETENTION: "15d"
+  PROMETHEUS_SCRAPE_INTERVAL: "15s"
+  GRAFANA_URL: "http://grafana.monitoring.svc.cluster.local:3000"
+  ALERTMANAGER_URL: "http://alertmanager-operated.monitoring.svc.cluster.local:9093"
+  OTEL_SERVICE_NAME: "monitoring"
+  AWS_REGION: "us-east-1"
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: platform-config
+  namespace: security
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+    app.kubernetes.io/component: config
+  annotations:
+    description: "Shared platform configuration for security workloads"
+data:
+  ENVIRONMENT: "dev"
+  PLATFORM_NAME: "chaos-platform"
+  LOG_LEVEL: "INFO"
+  KAFKA_BOOTSTRAP: "kafka-broker.kafka.svc.cluster.local:9092"
+  REDIS_HOST: "redis.load-tester.svc.cluster.local"
+  POSTGRES_HOST: "postgres.chaos-engine.svc.cluster.local"
+  VAULT_ADDR: "http://vault.security.svc.cluster.local:8200"
+  VAULT_NAMESPACE: "security"
+  AWS_REGION: "us-east-1"
+  # SECRET_REF: VAULT_TOKEN injected by external-secrets or Vault agent
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: platform-config
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+    app.kubernetes.io/component: config
+  annotations:
+    description: "Shared platform configuration for ArgoCD workloads"
+data:
+  ENVIRONMENT: "dev"
+  PLATFORM_NAME: "chaos-platform"
+  LOG_LEVEL: "INFO"
+  KAFKA_BOOTSTRAP: "kafka-broker.kafka.svc.cluster.local:9092"
+  REDIS_HOST: "redis.load-tester.svc.cluster.local"
+  POSTGRES_HOST: "postgres.chaos-engine.svc.cluster.local"
+  ARGOCD_NAMESPACE: "argocd"
+  GIT_REPO_URL: "https://github.com/jhonny1677/chaos-platform.git"
+  GIT_BRANCH: "main"
+  AWS_REGION: "us-east-1"
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: platform-config
+  namespace: jenkins
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+    app.kubernetes.io/component: config
+  annotations:
+    description: "Shared platform configuration for Jenkins workloads"
+data:
+  ENVIRONMENT: "dev"
+  PLATFORM_NAME: "chaos-platform"
+  LOG_LEVEL: "INFO"
+  KAFKA_BOOTSTRAP: "kafka-broker.kafka.svc.cluster.local:9092"
+  REDIS_HOST: "redis.load-tester.svc.cluster.local"
+  POSTGRES_HOST: "postgres.chaos-engine.svc.cluster.local"
+  JENKINS_URL: "http://jenkins.jenkins.svc.cluster.local:8080"
+  AWS_REGION: "us-east-1"
+  # SECRET_REF: JENKINS_ADMIN_PASSWORD from AWS Secrets Manager via external-secrets
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: platform-config
+  namespace: kafka
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+    app.kubernetes.io/component: config
+  annotations:
+    description: "Shared platform configuration for Kafka workloads"
+data:
+  ENVIRONMENT: "dev"
+  PLATFORM_NAME: "chaos-platform"
+  LOG_LEVEL: "INFO"
+  KAFKA_BOOTSTRAP: "kafka-broker.kafka.svc.cluster.local:9092"
+  REDIS_HOST: "redis.load-tester.svc.cluster.local"
+  POSTGRES_HOST: "postgres.chaos-engine.svc.cluster.local"
+  KAFKA_REPLICATION_FACTOR: "1"     # 1 for dev; 3 for prod
+  KAFKA_NUM_PARTITIONS: "3"
+  KAFKA_RETENTION_MS: "604800000"   # 7 days
+  AWS_REGION: "us-east-1"
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: platform-config
+  namespace: target-app
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+    app.kubernetes.io/component: config
+  annotations:
+    description: "Shared platform configuration for target-app workloads"
+data:
+  ENVIRONMENT: "dev"
+  PLATFORM_NAME: "chaos-platform"
+  LOG_LEVEL: "INFO"
+  KAFKA_BOOTSTRAP: "kafka-broker.kafka.svc.cluster.local:9092"
+  REDIS_HOST: "redis.load-tester.svc.cluster.local"
+  POSTGRES_HOST: "postgres.chaos-engine.svc.cluster.local"
+  TARGET_APP_PORT: "8080"
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector.monitoring.svc.cluster.local:4317"
+  OTEL_SERVICE_NAME: "target-app"
+  AWS_REGION: "us-east-1"

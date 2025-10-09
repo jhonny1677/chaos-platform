@@ -1,0 +1,80 @@
+# =============================================================================
+# RESOURCE QUOTA + LIMIT RANGE — chaos-engine namespace
+#
+# ResourceQuota: hard ceiling on total resources the namespace can consume.
+# LimitRange:    default requests/limits injected into containers that don't
+#                specify their own — prevents unbounded resource consumption.
+#
+# chaos-engine quota is moderate because chaos runs are periodic, not constant.
+# =============================================================================
+
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: chaos-engine-quota
+  namespace: chaos-engine
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+    app.kubernetes.io/component: chaos-engine
+  annotations:
+    description: "Hard resource ceiling for the chaos-engine namespace"
+spec:
+  hard:
+    # Compute
+    requests.cpu: "2"
+    requests.memory: "4Gi"
+    limits.cpu: "4"
+    limits.memory: "8Gi"
+
+    # Workloads
+    pods: "10"
+    count/deployments.apps: "5"
+    count/jobs.batch: "10"
+    count/cronjobs.batch: "5"
+
+    # Storage
+    requests.storage: "50Gi"
+    persistentvolumeclaims: "5"
+
+    # Services
+    services: "10"
+    services.loadbalancers: "0"    # no external LBs in chaos namespace
+    services.nodeports: "0"
+
+    # Config
+    count/configmaps: "20"
+    count/secrets: "20"
+
+---
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: chaos-engine-limits
+  namespace: chaos-engine
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+    app.kubernetes.io/component: chaos-engine
+  annotations:
+    description: "Default resource requests and limits for pods in chaos-engine"
+spec:
+  limits:
+    # Container defaults — applied when a container omits requests/limits
+    - type: Container
+      default:
+        cpu: "500m"
+        memory: "512Mi"
+      defaultRequest:
+        cpu: "100m"
+        memory: "128Mi"
+      max:
+        cpu: "2"
+        memory: "4Gi"
+      min:
+        cpu: "50m"
+        memory: "64Mi"
+
+    # Pod-level ceiling — sum of all containers in a single pod
+    - type: Pod
+      max:
+        cpu: "2"
+        memory: "4Gi"

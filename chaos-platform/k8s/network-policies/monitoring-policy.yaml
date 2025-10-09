@@ -1,0 +1,209 @@
+# =============================================================================
+# NETWORK POLICY — monitoring / observability rules
+#
+# Prometheus scrapes metrics endpoints (port 9090 and 9091 for federation,
+# 8080 for application metrics, and various exporter ports). This file:
+#   1. Grants monitoring namespace egress to all other namespaces on metric ports
+#   2. Grants each other namespace ingress from monitoring on those same ports
+#
+# Grafana (3000) and AlertManager (9093) ingress is also allowed so the
+# React dashboard can query them via an Ingress or port-forward.
+# =============================================================================
+
+# ── Monitoring namespace: allow outbound scraping ────────────────────────────
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: monitoring-allow-scrape-egress
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+    app.kubernetes.io/component: monitoring
+  annotations:
+    description: "Allow Prometheus to scrape metrics from all namespaces"
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: prometheus
+  policyTypes:
+    - Egress
+  egress:
+    # Prometheus metrics endpoints (standard exporter port)
+    - ports:
+        - port: 9090
+          protocol: TCP
+        # kube-state-metrics
+        - port: 8080
+          protocol: TCP
+        # node-exporter
+        - port: 9100
+          protocol: TCP
+        # cadvisor
+        - port: 4194
+          protocol: TCP
+        # application custom metrics
+        - port: 8081
+          protocol: TCP
+
+---
+# ── Allow monitoring ingress into: chaos-engine ──────────────────────────────
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-from-monitoring
+  namespace: chaos-engine
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+    app.kubernetes.io/component: network-policy
+  annotations:
+    description: "Allow Prometheus to scrape chaos-engine metrics"
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - port: 9090
+          protocol: TCP
+        - port: 8080
+          protocol: TCP
+        - port: 8081
+          protocol: TCP
+
+---
+# ── Allow monitoring ingress into: load-tester ───────────────────────────────
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-from-monitoring
+  namespace: load-tester
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - port: 9090
+          protocol: TCP
+        - port: 8080
+          protocol: TCP
+        - port: 8081
+          protocol: TCP
+
+---
+# ── Allow monitoring ingress into: target-app ────────────────────────────────
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-from-monitoring
+  namespace: target-app
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - port: 9090
+          protocol: TCP
+        - port: 8080
+          protocol: TCP
+        - port: 8081
+          protocol: TCP
+
+---
+# ── Allow monitoring ingress into: kafka ─────────────────────────────────────
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-from-monitoring
+  namespace: kafka
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - port: 9090
+          protocol: TCP
+        - port: 9308     # kafka-exporter
+          protocol: TCP
+
+---
+# ── Allow monitoring ingress into: security ──────────────────────────────────
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-from-monitoring
+  namespace: security
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - port: 9090
+          protocol: TCP
+        - port: 8200     # Vault metrics
+          protocol: TCP
+
+---
+# ── Grafana: allow UI access from ingress controller ─────────────────────────
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-grafana-ingress
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+    app.kubernetes.io/component: monitoring
+  annotations:
+    description: "Allow ingress controller and users to reach Grafana and AlertManager"
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: grafana
+  policyTypes:
+    - Ingress
+  ingress:
+    - ports:
+        - port: 3000
+          protocol: TCP

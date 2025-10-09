@@ -1,0 +1,313 @@
+# =============================================================================
+# NETWORK POLICIES — default deny + universal DNS allowance
+#
+# Security model: deny everything, then punch specific holes in other files.
+# Each namespace gets its own deny-all policy. A separate DNS-allow policy
+# is added per namespace immediately after so pods can resolve service names.
+#
+# Why DNS is exempt from deny-all: pods cannot function without DNS. Any
+# Kubernetes service call (redis.load-tester.svc.cluster.local, etc.) requires
+# port 53 to kube-dns in kube-system. Without this, all pods would fail
+# liveness probes and crash-loop.
+#
+# Apply order: apply this file BEFORE the specific allow policies.
+# =============================================================================
+
+# ── chaos-engine ─────────────────────────────────────────────────────────────
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: chaos-engine
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector: {}          # Matches every pod in the namespace
+  policyTypes:
+    - Ingress
+    - Egress
+  # No ingress or egress rules = deny everything
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns-egress
+  namespace: chaos-engine
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+
+---
+# ── load-tester ──────────────────────────────────────────────────────────────
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: load-tester
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns-egress
+  namespace: load-tester
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+
+---
+# ── monitoring ───────────────────────────────────────────────────────────────
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns-egress
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+
+---
+# ── security ─────────────────────────────────────────────────────────────────
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: security
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns-egress
+  namespace: security
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+
+---
+# ── argocd ───────────────────────────────────────────────────────────────────
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns-egress
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    # DNS resolution
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    # ArgoCD must reach GitHub to pull manifests
+    - ports:
+        - port: 443
+          protocol: TCP
+        - port: 22
+          protocol: TCP
+
+---
+# ── jenkins ──────────────────────────────────────────────────────────────────
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: jenkins
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns-egress
+  namespace: jenkins
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    # Jenkins agents pull from DockerHub / GitHub / AWS ECR
+    - ports:
+        - port: 443
+          protocol: TCP
+
+---
+# ── kafka ────────────────────────────────────────────────────────────────────
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: kafka
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns-egress
+  namespace: kafka
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+
+---
+# ── target-app ───────────────────────────────────────────────────────────────
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: target-app
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns-egress
+  namespace: target-app
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP

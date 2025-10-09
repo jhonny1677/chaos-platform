@@ -1,0 +1,94 @@
+# =============================================================================
+# NAMESPACES — chaos engineering platform
+# Each namespace isolates a distinct concern; network policies enforce
+# that isolation so a compromised component cannot freely reach others.
+# =============================================================================
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: chaos-engine
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+    app.kubernetes.io/component: chaos-engine
+    # Required by network policies that select namespaces by label
+    kubernetes.io/metadata.name: chaos-engine
+  annotations:
+    description: "Hosts the chaos engine that randomly terminates pods and nodes"
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: load-tester
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+    app.kubernetes.io/component: load-tester
+    kubernetes.io/metadata.name: load-tester
+  annotations:
+    description: "Hosts the load testing workers that flood the target application"
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+    app.kubernetes.io/component: monitoring
+    kubernetes.io/metadata.name: monitoring
+  annotations:
+    description: "Prometheus, Grafana, Loki, AlertManager, OpenTelemetry Collector"
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: security
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+    app.kubernetes.io/component: security
+    kubernetes.io/metadata.name: security
+  annotations:
+    description: "Vault, cert-manager, Sealed Secrets, OPA, Falco"
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: argocd
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+    app.kubernetes.io/component: gitops
+    kubernetes.io/metadata.name: argocd
+  annotations:
+    description: "ArgoCD GitOps controller — syncs all manifests from GitHub"
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: jenkins
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+    app.kubernetes.io/component: ci
+    kubernetes.io/metadata.name: jenkins
+  annotations:
+    description: "Jenkins CI — builds and tests application images"
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kafka
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+    app.kubernetes.io/component: streaming
+    kubernetes.io/metadata.name: kafka
+  annotations:
+    description: "Kafka broker and Zookeeper for real-time experiment event streaming"
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: target-app
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+    app.kubernetes.io/component: target
+    kubernetes.io/metadata.name: target-app
+  annotations:
+    description: "The deliberately breakable fake application that chaos is applied to"

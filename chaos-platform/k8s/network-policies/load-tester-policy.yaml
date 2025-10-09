@@ -1,0 +1,86 @@
+# =============================================================================
+# NETWORK POLICY — load-tester specific rules
+#
+# Load-tester workers generate HTTP traffic toward target-app.
+# They also publish metrics/results to Kafka and need to read Redis
+# (rate-limiter / shared state between worker instances).
+# All other destinations remain blocked by the default-deny policy.
+# =============================================================================
+
+# Allow load-tester pods to reach target-app on HTTP ports
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: load-tester-to-target-app
+  namespace: load-tester
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+    app.kubernetes.io/component: load-tester
+  annotations:
+    description: "Allow outbound HTTP traffic from load-tester workers to target-app"
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: load-tester
+  policyTypes:
+    - Egress
+  egress:
+    # HTTP traffic to the target application
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: target-app
+      ports:
+        - port: 8080
+          protocol: TCP
+        - port: 80
+          protocol: TCP
+        - port: 443
+          protocol: TCP
+
+    # Kafka — publish load test results and throughput events
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kafka
+      ports:
+        - port: 9092
+          protocol: TCP
+
+    # Redis — shared rate-limiting and worker coordination state
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: load-tester
+      podSelector:
+        matchLabels:
+          app: redis
+      ports:
+        - port: 6379
+          protocol: TCP
+
+---
+# Allow target-app to receive load from load-tester namespace
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-from-load-tester
+  namespace: target-app
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+    app.kubernetes.io/component: network-policy
+  annotations:
+    description: "Allow load-tester traffic into target-app"
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: load-tester
+      ports:
+        - port: 8080
+          protocol: TCP
+        - port: 80
+          protocol: TCP
+        - port: 443
+          protocol: TCP
