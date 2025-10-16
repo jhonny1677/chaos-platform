@@ -1,0 +1,32 @@
+# =============================================================================
+# Service — target-app
+#
+# ClusterIP exposes the deployment inside the cluster. External traffic enters
+# through the Ingress. The load-tester pods hit this service by DNS name:
+#   http://target-app.target-app.svc.cluster.local:80
+# =============================================================================
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: target-app
+  namespace: target-app
+  labels:
+    app: target-app
+    app.kubernetes.io/part-of: chaos-platform
+    app.kubernetes.io/component: target-app
+  annotations:
+    description: "ClusterIP service for the target-app pods"
+    # Prometheus service discovery annotation (backup to pod annotation)
+    prometheus.io/scrape: "true"
+    prometheus.io/path: "/metrics"
+    prometheus.io/port: "8000"
+spec:
+  type: ClusterIP
+  selector:
+    app: target-app
+  ports:
+    - name: http
+      protocol: TCP
+      port: 80           # port the Service listens on (cluster-internal)
+      targetPort: 8000   # port the container exposes

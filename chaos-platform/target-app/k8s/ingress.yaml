@@ -1,0 +1,52 @@
+# =============================================================================
+# Ingress — target-app
+#
+# Exposes the app at http://target-app.chaos-platform.local (local dev) or
+# https://target-app.<your-domain> in a real cluster with cert-manager.
+#
+# For local testing with minikube/kind:
+#   echo "$(minikube ip) target-app.chaos-platform.local" | sudo tee -a /etc/hosts
+# =============================================================================
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: target-app
+  namespace: target-app
+  labels:
+    app: target-app
+    app.kubernetes.io/part-of: chaos-platform
+    app.kubernetes.io/component: target-app
+  annotations:
+    # nginx ingress controller — installed by helmfile (future phase)
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "10"
+
+    # Rate limiting — 100 rps per IP; excess goes to load-tester via annotation
+    nginx.ingress.kubernetes.io/limit-rps: "100"
+
+    # TLS managed by cert-manager using the staging ClusterIssuer from Phase 2
+    # Switch to letsencrypt-prod once staging works end-to-end
+    cert-manager.io/cluster-issuer: "letsencrypt-staging"
+
+    description: "Ingress for the target-app — primary entry point for load tests"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - target-app.chaos-platform.local
+      secretName: target-app-tls    # cert-manager creates this Secret automatically
+  rules:
+    - host: target-app.chaos-platform.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: target-app
+                port:
+                  number: 80

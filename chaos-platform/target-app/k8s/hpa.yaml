@@ -1,0 +1,67 @@
+# =============================================================================
+# HorizontalPodAutoscaler — target-app
+#
+# Scales between 3 and 10 pods based on CPU utilization.
+# This is the counter-force to chaos: when the /stress endpoint saturates
+# CPU, HPA adds pods, which dilutes the load. The chaos engine must kill pods
+# faster than HPA can replace them to cause sustained degradation.
+#
+# Scale-up is fast (60s stabilization) so recovery after chaos is observable.
+# Scale-down is slow (300s) to prevent thrashing after a brief traffic spike.
+# =============================================================================
+
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: target-app-hpa
+  namespace: target-app
+  labels:
+    app: target-app
+    app.kubernetes.io/part-of: chaos-platform
+    app.kubernetes.io/component: target-app
+  annotations:
+    description: "Scale target-app 3–10 pods based on CPU and memory pressure"
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: target-app
+
+  minReplicas: 3
+  maxReplicas: 10
+
+  metrics:
+    # Scale out when average CPU across all pods exceeds 70%
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+
+    # Scale out when average memory across all pods exceeds 80%
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+
+  behavior:
+    scaleUp:
+      # Wait 60s before scaling up again — avoids spike-induced over-scaling
+      stabilizationWindowSeconds: 60
+      policies:
+        # Add at most 2 pods per minute during scale-up
+        - type: Pods
+          value: 2
+          periodSeconds: 60
+
+    scaleDown:
+      # Wait 5 minutes before scaling down — prevents thrashing after traffic dip
+      stabilizationWindowSeconds: 300
+      policies:
+        # Remove at most 1 pod per minute during scale-down
+        - type: Pods
+          value: 1
+          periodSeconds: 60

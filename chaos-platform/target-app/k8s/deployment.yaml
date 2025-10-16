@@ -1,0 +1,189 @@
+# =============================================================================
+# Deployment — target-app
+#
+# 3 replicas spread across nodes with pod anti-affinity.
+# PodDisruptionBudget ensures at least 2 pods remain during node drains —
+# this is what makes chaos experiments interesting: Kubernetes fights back.
+# =============================================================================
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: target-app-sa
+  namespace: target-app
+  labels:
+    app: target-app
+    app.kubernetes.io/part-of: chaos-platform
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: target-app
+  namespace: target-app
+  labels:
+    app: target-app
+    app.kubernetes.io/part-of: chaos-platform
+    app.kubernetes.io/component: target-app
+    app.kubernetes.io/version: "1.0.0"
+  annotations:
+    description: "Fake e-commerce API — primary chaos experiment target"
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: target-app
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0    # zero-downtime deploys — always keep 3 pods up during rollout
+
+  template:
+    metadata:
+      labels:
+        app: target-app
+        app.kubernetes.io/part-of: chaos-platform
+        app.kubernetes.io/component: target-app
+      annotations:
+        # Prometheus auto-discovery: scrape /metrics on port 8000
+        prometheus.io/scrape: "true"
+        prometheus.io/path: "/metrics"
+        prometheus.io/port: "8000"
+
+    spec:
+      serviceAccountName: target-app-sa
+      terminationGracePeriodSeconds: 30    # give in-flight requests time to finish
+
+      # Security context — run as non-root to match Dockerfile UID
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+
+      # Anti-affinity: prefer spreading pods across different nodes
+      # This makes chaos experiments more interesting — killing one node
+      # should still leave pods running on the other nodes.
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app: target-app
+
+      containers:
+        - name: target-app
+          # Replace with your ECR repository URI after `docker build && docker push`
+          # SECRET_REF: image tag should come from CI pipeline (GitHub Actions SHA tag)
+          image: target-app:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+
+          # Resource limits enforce the chaos experiment boundary.
+          # /stress will be throttled at 500m CPU.
+          # /memory with 10 concurrent requests will trigger OOMKilled at 512Mi.
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+
+          # Liveness probe: if /health stops responding, restart the pod
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 30    # allow time for DB init + seed on first start
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+            successThreshold: 1
+
+          # Readiness probe: stop routing traffic if DB is unreachable
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+            successThreshold: 1
+
+          # Startup probe: give extra time on cold start before liveness kicks in
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 12    # 12 × 5s = 60s max startup time
+
+          # Load environment from ConfigMap (non-secret) and Secret (passwords)
+          envFrom:
+            - configMapRef:
+                name: target-app-config
+            # SECRET_REF: created by external-secrets pulling from AWS Secrets Manager
+            # - secretRef:
+            #     name: target-app-secrets
+
+          # Downward API: inject pod metadata so logs/metrics identify the pod
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+
+          # Container-level security hardening
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+
+          # Writable tmp dir (needed by some Python libs for temp files)
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+
+      volumes:
+        - name: tmp
+          emptyDir: {}
+
+---
+# PodDisruptionBudget: Kubernetes won't drain a node if it would leave
+# fewer than 2 target-app pods running. This creates the interesting tension
+# during chaos experiments — the chaos engine must kill pods fast enough
+# to outpace PDB protection before Kubernetes reschedules replacements.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: target-app-pdb
+  namespace: target-app
+  labels:
+    app: target-app
+    app.kubernetes.io/part-of: chaos-platform
+  annotations:
+    description: "Always keep at least 2 pods available during node drains and chaos"
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: target-app
