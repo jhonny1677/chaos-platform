@@ -1,0 +1,96 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: chaos-engine
+  namespace: chaos-engine
+  labels:
+    app: chaos-engine
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: chaos-engine
+  strategy:
+    type: Recreate   # Only one replica ever runs; Recreate avoids two instances racing on experiments
+  template:
+    metadata:
+      labels:
+        app: chaos-engine
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9091"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: chaos-engine-sa
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+        - name: chaos-engine
+          image: chaos-engine:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8001
+            - name: metrics
+              containerPort: 9091
+          envFrom:
+            - configMapRef:
+                name: chaos-engine-config
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  # SECRET_REF: Create via: kubectl create secret generic chaos-engine-db \
+                  #   --from-literal=url='postgresql+asyncpg://user:pass@host:5432/db' \
+                  #   -n chaos-engine
+                  name: chaos-engine-db
+                  key: url
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: 8001
+            initialDelaySeconds: 20
+            periodSeconds: 30
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 8001
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app
+                      operator: In
+                      values: ["chaos-engine"]
+                topologyKey: kubernetes.io/hostname

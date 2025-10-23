@@ -1,0 +1,55 @@
+---
+# Scheduled chaos job example: kill 20% of target-app pods every weekday at 02:00 UTC.
+# This supplements the scheduler built into the Deployment — use this when you
+# want experiments to run even if the chaos-engine pod itself is down (K8s fires
+# the CronJob independently).
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: scheduled-pod-kill
+  namespace: chaos-engine
+  labels:
+    app: chaos-engine
+spec:
+  schedule: "0 2 * * 1-5"
+  concurrencyPolicy: Forbid          # Never run two overlapping chaos experiments
+  successfulJobsHistoryLimit: 5
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: chaos-engine
+            job-type: scheduled-chaos
+        spec:
+          serviceAccountName: chaos-engine-sa
+          restartPolicy: Never
+          containers:
+            - name: trigger
+              image: curlimages/curl:8.5.0
+              command:
+                - sh
+                - -c
+                - |
+                  curl -s -X POST http://chaos-engine.chaos-engine:8001/experiments \
+                    -H 'Content-Type: application/json' \
+                    -d '{
+                      "name": "Scheduled pod kill",
+                      "target_namespace": "target-app",
+                      "chaos_type": "pod_kill",
+                      "parameters": {"kill_percentage": 20, "recovery_timeout_seconds": 120},
+                      "steady_state_thresholds": {"error_rate_percent": 5.0, "latency_p99_ms": 2000}
+                    }' && echo "Experiment triggered"
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 16Mi
+                limits:
+                  cpu: 50m
+                  memory: 32Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
