@@ -1,0 +1,71 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: load-tester-worker
+  namespace: load-tester
+  labels:
+    app: load-tester-worker
+spec:
+  replicas: 2           # KEDA manages actual replica count; this is the baseline
+  selector:
+    matchLabels:
+      app: load-tester-worker
+  template:
+    metadata:
+      labels:
+        app: load-tester-worker
+      annotations:
+        prometheus.io/scrape: "false"   # workers don't expose metrics
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+        - name: worker
+          image: load-tester-worker:latest
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: load-tester-config
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            # LOAD_TEST_ID is injected dynamically when the controller starts a test.
+            # Workers read this at startup to fetch config from Redis.
+            - name: LOAD_TEST_ID
+              value: ""   # override per-test via kubectl set env or a Job
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+      # Workers should spread across nodes to avoid a single-node bottleneck
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 50
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app
+                      operator: In
+                      values: ["load-tester-worker"]
+                topologyKey: kubernetes.io/hostname
+      # Terminate quickly so KEDA scale-down is fast
+      terminationGracePeriodSeconds: 30

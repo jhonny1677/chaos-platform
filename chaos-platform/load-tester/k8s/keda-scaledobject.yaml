@@ -1,0 +1,58 @@
+---
+# KEDA ScaledObject — scales load-tester-worker pods based on Kafka topic lag.
+#
+# Scale-up trigger: consumer group lag on load-test-results > 1000 messages
+#   → more workers needed to process / send results
+# Scale-down trigger: lag drops below 100 messages
+#   → test is producing results faster than workers; reduce
+#
+# Min: 1 (always keep one warm worker)  Max: 20
+#
+# Requires KEDA >= 2.12 installed in the cluster (helmfile Phase 2 includes it).
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: load-tester-worker-scaler
+  namespace: load-tester
+  labels:
+    app: load-tester-worker
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: load-tester-worker
+
+  minReplicaCount: 1
+  maxReplicaCount: 20
+
+  # Cool-down: wait 60s before scaling down to avoid thrashing
+  cooldownPeriod: 60
+  # Poll Kafka every 10 seconds
+  pollingInterval: 10
+
+  triggers:
+    - type: kafka
+      metadata:
+        bootstrapServers: kafka.kafka:9092
+        consumerGroup: load-tester-workers
+        topic: load-test-results
+        lagThreshold: "1000"         # scale up when lag > 1000
+        offsetResetPolicy: latest
+
+  # Scale-down to minReplicaCount when lag < 100 messages
+  # (KEDA computes this from lagThreshold / activationLagThreshold)
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleDown:
+          stabilizationWindowSeconds: 60
+          policies:
+            - type: Pods
+              value: 2              # remove max 2 pods at a time on scale-down
+              periodSeconds: 30
+        scaleUp:
+          stabilizationWindowSeconds: 15
+          policies:
+            - type: Pods
+              value: 5              # add max 5 pods at a time on scale-up
+              periodSeconds: 15
