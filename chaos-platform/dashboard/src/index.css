@@ -1,0 +1,56 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-gray-900 text-gray-100 antialiased;
+    font-family: 'Inter', ui-sans-serif, system-ui, sans-serif;
+  }
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { @apply bg-gray-900; }
+  ::-webkit-scrollbar-thumb { @apply bg-gray-600 rounded-full; }
+  ::-webkit-scrollbar-thumb:hover { @apply bg-gray-500; }
+}
+
+@layer components {
+  .card {
+    @apply bg-gray-800 rounded-xl border border-gray-700 p-4;
+  }
+  .btn-primary {
+    @apply bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg
+           font-medium transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  .btn-danger {
+    @apply bg-red-600 hover:bg-red-500 text-white px-4 py-2 rounded-lg
+           font-medium transition-colors duration-150;
+  }
+  .btn-ghost {
+    @apply text-gray-400 hover:text-gray-200 hover:bg-gray-700 px-3 py-2 rounded-lg
+           font-medium transition-colors duration-150;
+  }
+  .input {
+    @apply bg-gray-700 border border-gray-600 text-gray-100 rounded-lg px-3 py-2
+           focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent
+           placeholder-gray-400 w-full;
+  }
+  .select {
+    @apply bg-gray-700 border border-gray-600 text-gray-100 rounded-lg px-3 py-2
+           focus:outline-none focus:ring-2 focus:ring-blue-500 w-full;
+  }
+  .label {
+    @apply text-sm font-medium text-gray-300 mb-1 block;
+  }
+  .section-title {
+    @apply text-lg font-semibold text-gray-100 mb-4;
+  }
+}
+
+/* Recharts dark theme overrides */
+.recharts-cartesian-grid-horizontal line,
+.recharts-cartesian-grid-vertical line {
+  stroke: #374151;
+}
+.recharts-text { fill: #9CA3AF; }
+.recharts-legend-item-text { color: #D1D5DB !important; }
+.recharts-tooltip-wrapper { outline: none; }

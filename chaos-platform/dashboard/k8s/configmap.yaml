@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dashboard-config
+  namespace: chaos-engine
+  labels:
+    app: dashboard
+data:
+  # Injected into the nginx-served index.html via an init container or build arg.
+  # For a Vite app these must be baked in at build time using --build-arg
+  # or set as VITE_* env vars before running `npm run build`.
+  #
+  # In a GitOps workflow, update these values and trigger a re-build/re-deploy.
+  VITE_CHAOS_API_URL:    "http://chaos-engine.chaos-engine:8001"
+  VITE_LOADTEST_API_URL: "http://load-tester.load-tester:8002"
+  VITE_PROMETHEUS_URL:   "http://prometheus-kube-prometheus-prometheus.monitoring:9090"
+  VITE_ALERTMANAGER_URL: "http://prometheus-kube-prometheus-alertmanager.monitoring:9093"
+  VITE_WS_URL:           "ws://chaos-engine.chaos-engine:8001"
+  VITE_TARGET_URL:       "http://target-app.target-app:8000"
