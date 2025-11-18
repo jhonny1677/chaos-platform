@@ -1,0 +1,47 @@
+# Sync wave 1: target-app deploys first among application services.
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: target-app
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+    app.kubernetes.io/component: target
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: chaos-platform
+
+  source:
+    repoURL:        https://github.com/jhonny1677/chaos-platform.git
+    targetRevision: HEAD
+    path:           chaos-platform/target-app/k8s
+
+  destination:
+    server:    https://kubernetes.default.svc
+    namespace: target-app
+
+  syncPolicy:
+    automated:
+      # prune: true removes resources deleted from git — safe for apps
+      prune:    true
+      selfHeal: true
+    retry:
+      limit: 5
+      backoff:
+        duration:    5s
+        factor:      2
+        maxDuration: 3m
+    syncOptions:
+      - CreateNamespace=true
+      - RespectIgnoreDifferences=true
+
+  ignoreDifferences:
+    # HPA controls replica count at runtime — don't let ArgoCD fight it
+    - group: apps
+      kind:  Deployment
+      jsonPointers:
+        - /spec/replicas

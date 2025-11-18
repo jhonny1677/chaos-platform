@@ -1,0 +1,175 @@
+# Daily dependency vulnerability scan.
+# Checks Python requirements.txt with Safety and package.json with npm audit.
+# Opens a GitHub Issue automatically if HIGH vulnerabilities are found.
+
+name: "Dependency Scan — Daily"
+
+on:
+  schedule:
+    - cron: "0 6 * * *"   # Every day at 06:00 UTC
+  workflow_dispatch:
+
+jobs:
+  # ── Python dependency check with Safety ────────────────────────────────────
+  python-safety:
+    name: Safety — Python Dependencies
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service:
+          - chaos-platform/target-app
+          - chaos-platform/chaos-engine
+          - chaos-platform/load-tester
+
+    outputs:
+      has-vulns: ${{ steps.check.outputs.has-vulns }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Safety
+        run: pip install safety
+
+      - name: Run Safety check
+        id: check
+        run: |
+          set +e
+          safety check \
+            -r ${{ matrix.service }}/requirements.txt \
+            --json \
+            --output safety-${{ matrix.service == 'chaos-platform/target-app' && 'target-app' || matrix.service == 'chaos-platform/chaos-engine' && 'chaos-engine' || 'load-tester' }}.json \
+            2>&1 | tee safety-output.txt
+
+          EXIT_CODE=$?
+          echo "exit-code=${EXIT_CODE}" >> "$GITHUB_OUTPUT"
+
+          # Check for HIGH vulnerabilities (severity >= 7.0 CVSS)
+          if grep -q '"severity": "high"' safety-output.txt 2>/dev/null || [ $EXIT_CODE -ne 0 ]; then
+            echo "has-vulns=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has-vulns=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload Safety report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: safety-${{ strategy.job-index }}-${{ github.run_id }}
+          path: "*.json"
+          retention-days: 30
+
+  # ── JavaScript dependency check with npm audit ─────────────────────────────
+  npm-audit:
+    name: npm audit — Dashboard
+    runs-on: ubuntu-latest
+    outputs:
+      has-vulns: ${{ steps.audit.outputs.has-vulns }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: chaos-platform/dashboard/package-lock.json
+
+      - name: Install dependencies
+        working-directory: chaos-platform/dashboard
+        run: npm ci
+
+      - name: Run npm audit
+        id: audit
+        working-directory: chaos-platform/dashboard
+        run: |
+          set +e
+          npm audit --audit-level=high --json > npm-audit.json 2>&1
+          EXIT_CODE=$?
+          cat npm-audit.json
+
+          if [ $EXIT_CODE -ne 0 ]; then
+            echo "has-vulns=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has-vulns=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload npm audit report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: npm-audit-${{ github.run_id }}
+          path: chaos-platform/dashboard/npm-audit.json
+          retention-days: 30
+
+  # ── Open GitHub Issue if HIGH vulnerabilities found ─────────────────────────
+  open-issue:
+    name: Open GitHub Issue
+    runs-on: ubuntu-latest
+    needs: [python-safety, npm-audit]
+    # Only open an issue if vulnerabilities were found
+    if: |
+      always() &&
+      (needs.python-safety.outputs.has-vulns == 'true' ||
+       needs.npm-audit.outputs.has-vulns == 'true')
+    permissions:
+      issues: write
+
+    steps:
+      - name: Check for existing vulnerability issue
+        id: existing
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'security,dependencies',
+            });
+            const existing = issues.find(i => i.title.includes('HIGH dependency vulnerabilities'));
+            return existing ? existing.number : null;
+
+      - name: Create vulnerability issue
+        if: steps.existing.outputs.result == 'null'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pythonVulns = '${{ needs.python-safety.outputs.has-vulns }}' === 'true';
+            const npmVulns    = '${{ needs.npm-audit.outputs.has-vulns }}'    === 'true';
+            const services    = [
+              pythonVulns && '- Python (target-app, chaos-engine, load-tester)',
+              npmVulns    && '- JavaScript (dashboard)',
+            ].filter(Boolean).join('\n');
+
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `🔴 HIGH dependency vulnerabilities found — ${new Date().toISOString().slice(0,10)}`,
+              labels: ['security', 'dependencies', 'high-priority'],
+              body: [
+                '## HIGH Dependency Vulnerabilities Detected',
+                '',
+                'The daily dependency scan found HIGH or CRITICAL vulnerabilities in:',
+                services,
+                '',
+                `**Workflow run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}`,
+                '',
+                '### Action Required',
+                '1. Download the scan artifacts from the workflow run',
+                '2. Review the affected packages',
+                '3. Update dependencies: `pip install --upgrade <package>` or `npm update <package>`',
+                '4. Re-run the scan to confirm resolution',
+                '5. Close this issue once resolved',
+                '',
+                '*This issue was opened automatically by the dependency-scan workflow.*',
+              ].join('\n'),
+            });

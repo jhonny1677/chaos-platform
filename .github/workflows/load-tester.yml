@@ -1,0 +1,198 @@
+# CI/CD pipeline for the load-tester service.
+# Identical 4-job structure: test → security → build → manifest update.
+
+name: "load-tester — CI/CD"
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "chaos-platform/load-tester/**"
+      - ".github/workflows/load-tester.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "chaos-platform/load-tester/**"
+  workflow_dispatch:
+
+env:
+  SERVICE:     load-tester
+  SERVICE_DIR: chaos-platform/load-tester
+  ECR_REPO:    chaos-platform/load-tester
+  PYTHON_VER:  "3.11"
+
+jobs:
+  test:
+    name: Test & Coverage
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: chaos-platform/load-tester
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VER }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VER }}
+          cache: pip
+          cache-dependency-path: chaos-platform/load-tester/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-cov pytest-asyncio
+
+      - name: Run pytest with coverage (fail if below 70%)
+        run: |
+          pytest tests/ \
+            --cov=app \
+            --cov-report=xml:coverage.xml \
+            --cov-report=term-missing \
+            --cov-fail-under=70 \
+            -v
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-${{ env.SERVICE }}-${{ github.run_id }}
+          path: chaos-platform/load-tester/coverage.xml
+          retention-days: 30
+
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Trivy — CRITICAL vulnerability scan (blocks pipeline)
+        uses: aquasecurity/trivy-action@0.18.0
+        with:
+          scan-type: fs
+          scan-ref:  chaos-platform/load-tester
+          severity:  CRITICAL
+          exit-code: "1"
+          format:    table
+
+      - name: Trivy — full SARIF report
+        uses: aquasecurity/trivy-action@0.18.0
+        with:
+          scan-type: fs
+          scan-ref:  chaos-platform/load-tester
+          format:    sarif
+          output:    trivy-${{ env.SERVICE }}.sarif
+          exit-code: "0"
+
+      - name: Upload Trivy SARIF report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: trivy-${{ env.SERVICE }}-${{ github.run_id }}
+          path: trivy-${{ env.SERVICE }}.sarif
+          retention-days: 30
+
+      - name: Bandit — Python security lint
+        run: |
+          pip install "bandit[toml]"
+          bandit -r chaos-platform/load-tester/app/ \
+            --severity-level medium \
+            --format json \
+            --output bandit-${{ env.SERVICE }}.json || true
+          bandit -r chaos-platform/load-tester/app/ --severity-level high
+
+      - name: Upload Bandit report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bandit-${{ env.SERVICE }}-${{ github.run_id }}
+          path: bandit-${{ env.SERVICE }}.json
+          retention-days: 30
+
+  build-push:
+    name: Build & Push to ECR
+    runs-on: ubuntu-latest
+    needs: security-scan
+    if: github.ref == 'refs/heads/main'
+    outputs:
+      image-uri: ${{ steps.push.outputs.image-uri }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ secrets.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push Docker image (API + worker images)
+        id: push
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          TAG="${GITHUB_SHA:0:7}"
+          IMAGE_BASE="${REGISTRY}/${{ env.ECR_REPO }}"
+
+          # Build API image
+          docker build \
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            --label "org.opencontainers.image.created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -t "${IMAGE_BASE}:${TAG}" \
+            -t "${IMAGE_BASE}:latest" \
+            chaos-platform/load-tester/
+
+          # Build standalone worker image
+          docker build \
+            -f chaos-platform/load-tester/Dockerfile.worker \
+            -t "${REGISTRY}/chaos-platform/load-tester-worker:${TAG}" \
+            -t "${REGISTRY}/chaos-platform/load-tester-worker:latest" \
+            chaos-platform/load-tester/
+
+          docker push "${IMAGE_BASE}:${TAG}"
+          docker push "${IMAGE_BASE}:latest"
+          docker push "${REGISTRY}/chaos-platform/load-tester-worker:${TAG}"
+          docker push "${REGISTRY}/chaos-platform/load-tester-worker:latest"
+
+          echo "image-uri=${IMAGE_BASE}:${TAG}" >> "$GITHUB_OUTPUT"
+
+  update-manifests:
+    name: Update K8s Image Tag
+    runs-on: ubuntu-latest
+    needs: build-push
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GH_PAT }}
+
+      - name: Patch image tag in deployment.yaml
+        env:
+          NEW_IMAGE: ${{ needs.build-push.outputs.image-uri }}
+        run: |
+          MANIFEST="chaos-platform/load-tester/k8s/deployment.yaml"
+          sed -i "s|image: .*load-tester.*|image: ${NEW_IMAGE}|g" "$MANIFEST"
+
+          git config user.name  "chaos-platform-bot"
+          git config user.email "bot@chaos-platform.local"
+          git add "$MANIFEST"
+
+          if git diff --cached --quiet; then
+            echo "Image tag unchanged — no commit needed."
+          else
+            git commit -m "ci: update load-tester image to ${NEW_IMAGE##*:} [skip ci]"
+            git push
+          fi

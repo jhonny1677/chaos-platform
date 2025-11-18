@@ -1,0 +1,204 @@
+# CI/CD pipeline for the target-app (fake e-commerce API) service.
+# Runs tests → security scan → ECR push → manifest update on every merge to main.
+
+name: "target-app — CI/CD"
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "chaos-platform/target-app/**"
+      - ".github/workflows/target-app.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "chaos-platform/target-app/**"
+  workflow_dispatch:
+    inputs:
+      force_deploy:
+        description: "Force ECR push even without code changes"
+        type: boolean
+        default: false
+
+env:
+  SERVICE:     target-app
+  SERVICE_DIR: chaos-platform/target-app
+  ECR_REPO:    chaos-platform/target-app
+  PYTHON_VER:  "3.11"
+
+jobs:
+  # ── Job 1: Test & Coverage ──────────────────────────────────────────────────
+  test:
+    name: Test & Coverage
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: chaos-platform/target-app
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VER }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VER }}
+          cache: pip
+          cache-dependency-path: chaos-platform/target-app/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-cov pytest-asyncio httpx aiosqlite
+
+      - name: Run pytest with coverage (fail if below 70%)
+        run: |
+          pytest tests/ \
+            --cov=app \
+            --cov-report=xml:coverage.xml \
+            --cov-report=term-missing \
+            --cov-fail-under=70 \
+            -v
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-${{ env.SERVICE }}-${{ github.run_id }}
+          path: chaos-platform/target-app/coverage.xml
+          retention-days: 30
+
+  # ── Job 2: Security Scan ────────────────────────────────────────────────────
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Trivy — CRITICAL vulnerability scan (blocks pipeline)
+        uses: aquasecurity/trivy-action@0.18.0
+        with:
+          scan-type: fs
+          scan-ref:  chaos-platform/target-app
+          severity:  CRITICAL
+          exit-code: "1"
+          format:    table
+
+      - name: Trivy — full SARIF report (informational, does not block)
+        uses: aquasecurity/trivy-action@0.18.0
+        with:
+          scan-type: fs
+          scan-ref:  chaos-platform/target-app
+          format:    sarif
+          output:    trivy-${{ env.SERVICE }}.sarif
+          exit-code: "0"
+
+      - name: Upload Trivy SARIF report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: trivy-${{ env.SERVICE }}-${{ github.run_id }}
+          path: trivy-${{ env.SERVICE }}.sarif
+          retention-days: 30
+
+      - name: Bandit — Python security lint (HIGH severity fails build)
+        run: |
+          pip install "bandit[toml]"
+          # Generate full JSON report for artifact
+          bandit -r chaos-platform/target-app/app/ \
+            --severity-level medium \
+            --format json \
+            --output bandit-${{ env.SERVICE }}.json || true
+          # Strict check — HIGH severity exits non-zero
+          bandit -r chaos-platform/target-app/app/ \
+            --severity-level high
+
+      - name: Upload Bandit report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bandit-${{ env.SERVICE }}-${{ github.run_id }}
+          path: bandit-${{ env.SERVICE }}.json
+          retention-days: 30
+
+  # ── Job 3: Build & Push to ECR ─────────────────────────────────────────────
+  build-push:
+    name: Build & Push to ECR
+    runs-on: ubuntu-latest
+    needs: security-scan
+    # Only push on merges to main, not on PRs
+    if: github.ref == 'refs/heads/main'
+    outputs:
+      image-uri: ${{ steps.push.outputs.image-uri }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ secrets.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push Docker image (latest + git-SHA tag)
+        id: push
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          TAG="${GITHUB_SHA:0:7}"
+          IMAGE_BASE="${REGISTRY}/${{ env.ECR_REPO }}"
+
+          docker build \
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            --label "org.opencontainers.image.created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --label "org.opencontainers.image.source=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" \
+            -t "${IMAGE_BASE}:${TAG}" \
+            -t "${IMAGE_BASE}:latest" \
+            chaos-platform/target-app/
+
+          docker push "${IMAGE_BASE}:${TAG}"
+          docker push "${IMAGE_BASE}:latest"
+
+          echo "image-uri=${IMAGE_BASE}:${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Pushed: ${IMAGE_BASE}:${TAG}"
+
+  # ── Job 4: Update K8s Manifest — ArgoCD detects and deploys ────────────────
+  update-manifests:
+    name: Update K8s Image Tag
+    runs-on: ubuntu-latest
+    needs: build-push
+
+    steps:
+      - name: Checkout code (with PAT so push is allowed)
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GH_PAT }}
+
+      - name: Patch image tag in deployment.yaml
+        env:
+          NEW_IMAGE: ${{ needs.build-push.outputs.image-uri }}
+          MANIFEST:  chaos-platform/target-app/k8s/deployment.yaml
+        run: |
+          sed -i "s|image: .*target-app.*|image: ${NEW_IMAGE}|g" "$MANIFEST"
+
+          git config user.name  "chaos-platform-bot"
+          git config user.email "bot@chaos-platform.local"
+          git add "$MANIFEST"
+
+          if git diff --cached --quiet; then
+            echo "Image tag unchanged — no commit needed."
+          else
+            git commit -m "ci: update target-app image to ${NEW_IMAGE##*:} [skip ci]"
+            git push
+            echo "Manifest updated. ArgoCD will detect and deploy automatically."
+          fi

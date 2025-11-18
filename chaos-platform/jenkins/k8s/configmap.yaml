@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: jenkins-env
+  namespace: jenkins
+  labels:
+    app: jenkins
+data:
+  # Jenkins public URL — used in JCasC and email links
+  JENKINS_URL:       "http://jenkins.chaos-platform.local"
+  CHAOS_API_URL:     "http://chaos-engine.chaos-engine:8001"
+  LOADTEST_API_URL:  "http://load-tester.load-tester:8002"
+
+  # Slack workspace domain (token is in a Secret, not here)
+  SLACK_TEAM_DOMAIN: "chaos-platform"
+
+  # GitHub organisation / user
+  GITHUB_USER: "jhonny1677"
+
+  # AWS region for ECR operations (account ID comes from IRSA)
+  AWS_REGION: "us-east-1"

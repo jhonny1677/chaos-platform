@@ -1,0 +1,47 @@
+# Sync wave -2: monitoring deploys FIRST so Prometheus is ready
+# before the application services come up.
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: monitoring-stack
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+    app.kubernetes.io/component: monitoring
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: chaos-platform
+
+  source:
+    repoURL:        https://github.com/jhonny1677/chaos-platform.git
+    targetRevision: HEAD
+    path:           chaos-platform/k8s/monitoring   # Prometheus, Grafana, Loki configs
+
+  destination:
+    server:    https://kubernetes.default.svc
+    namespace: monitoring
+
+  syncPolicy:
+    automated:
+      prune:    true
+      selfHeal: true
+    retry:
+      limit: 5
+      backoff:
+        duration:    5s
+        factor:      2
+        maxDuration: 3m
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+
+  ignoreDifferences:
+    # Prometheus Operator updates these fields at runtime
+    - group: monitoring.coreos.com
+      kind:  Prometheus
+      jsonPointers:
+        - /spec/replicas

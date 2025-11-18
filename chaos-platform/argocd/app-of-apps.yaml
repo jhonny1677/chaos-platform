@@ -1,0 +1,36 @@
+# App of Apps — the root ArgoCD Application.
+# This single application manages all other ArgoCD applications by watching
+# the argocd/apps/ directory. Any Application manifest added there is auto-synced.
+#
+# Bootstrap: kubectl apply -f chaos-platform/argocd/app-of-apps.yaml
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: app-of-apps
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name:    app-of-apps
+    app.kubernetes.io/part-of: chaos-platform
+  finalizers:
+    # Ensures child apps are deleted before this app is deleted
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default   # Must use 'default' until chaos-platform project is synced
+
+  source:
+    repoURL:        https://github.com/jhonny1677/chaos-platform.git
+    targetRevision: HEAD
+    path:           chaos-platform/argocd/apps   # Watches all Application manifests here
+
+  destination:
+    server:    https://kubernetes.default.svc
+    namespace: argocd
+
+  syncPolicy:
+    automated:
+      prune:     true    # Remove apps deleted from argocd/apps/
+      selfHeal:  true    # Re-sync if someone manually edits ArgoCD state
+    syncOptions:
+      - CreateNamespace=false   # argocd namespace already exists
+      - ServerSideApply=true

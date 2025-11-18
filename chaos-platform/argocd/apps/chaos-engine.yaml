@@ -1,0 +1,46 @@
+# Sync wave 2: chaos-engine needs target-app already running.
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: chaos-engine
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+    app.kubernetes.io/component: chaos
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: chaos-platform
+
+  source:
+    repoURL:        https://github.com/jhonny1677/chaos-platform.git
+    targetRevision: HEAD
+    path:           chaos-platform/chaos-engine/k8s
+
+  destination:
+    server:    https://kubernetes.default.svc
+    namespace: chaos-engine
+
+  syncPolicy:
+    automated:
+      prune:    true
+      selfHeal: true
+    retry:
+      limit: 5
+      backoff:
+        duration:    5s
+        factor:      2
+        maxDuration: 3m
+    syncOptions:
+      - CreateNamespace=true
+      - RespectIgnoreDifferences=true
+
+  ignoreDifferences:
+    # Chaos engine runs as Recreate singleton — ArgoCD should not touch replicas
+    - group: apps
+      kind:  Deployment
+      jsonPointers:
+        - /spec/replicas

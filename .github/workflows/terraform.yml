@@ -1,0 +1,230 @@
+# Terraform CI/CD pipeline.
+# Validates and plans on PRs; applies only on manual approval after merge to main.
+
+name: "Terraform — Plan & Apply"
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "chaos-platform/terraform/**"
+      - ".github/workflows/terraform.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "chaos-platform/terraform/**"
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "Terraform action to run"
+        type: choice
+        options: [plan, apply, destroy]
+        default: plan
+
+env:
+  TF_DIR:     chaos-platform/terraform
+  TF_VERSION: "1.7.0"
+
+jobs:
+  # ── Job 1: Format check + Validate ─────────────────────────────────────────
+  validate:
+    name: Fmt Check & Validate
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Terraform ${{ env.TF_VERSION }}
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Configure AWS credentials (needed for provider init)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ secrets.AWS_REGION }}
+
+      - name: Terraform fmt check
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform fmt -check -recursive
+
+      - name: Terraform init
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform init -backend=false
+
+      - name: Terraform validate
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform validate
+
+  # ── Job 2: tfsec Security Scan ─────────────────────────────────────────────
+  tfsec:
+    name: tfsec Security Scan
+    runs-on: ubuntu-latest
+    needs: validate
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run tfsec — fail on HIGH and CRITICAL
+        uses: aquasecurity/tfsec-action@v1.0.0
+        with:
+          working_directory: ${{ env.TF_DIR }}
+          format:            lovely
+          minimum_severity:  HIGH
+          soft_fail:         false
+
+      - name: tfsec — generate SARIF report
+        uses: aquasecurity/tfsec-action@v1.0.0
+        with:
+          working_directory: ${{ env.TF_DIR }}
+          format:            sarif
+          out:               tfsec-results.sarif
+          soft_fail:         true
+
+      - name: Upload tfsec SARIF report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: tfsec-results-${{ github.run_id }}
+          path: tfsec-results.sarif
+          retention-days: 30
+
+  # ── Job 3: Terraform Plan (post as PR comment) ──────────────────────────────
+  plan:
+    name: Terraform Plan
+    runs-on: ubuntu-latest
+    needs: tfsec
+    # Plan runs on both PRs and pushes to main
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Terraform ${{ env.TF_VERSION }}
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ secrets.AWS_REGION }}
+
+      - name: Terraform init
+        working-directory: ${{ env.TF_DIR }}
+        env:
+          TF_VAR_aws_region:      ${{ secrets.AWS_REGION }}
+          TF_VAR_aws_account_id:  ${{ secrets.AWS_ACCOUNT_ID }}
+        run: terraform init
+
+      - name: Terraform plan
+        id: plan
+        working-directory: ${{ env.TF_DIR }}
+        env:
+          TF_VAR_aws_region:      ${{ secrets.AWS_REGION }}
+          TF_VAR_aws_account_id:  ${{ secrets.AWS_ACCOUNT_ID }}
+        run: |
+          terraform plan \
+            -out=tfplan \
+            -no-color \
+            2>&1 | tee plan-output.txt
+          echo "exitcode=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Upload plan file
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan-${{ github.run_id }}
+          path: |
+            ${{ env.TF_DIR }}/tfplan
+            plan-output.txt
+          retention-days: 7
+
+      - name: Post plan as PR comment
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const plan = fs.readFileSync('plan-output.txt', 'utf8');
+            const MAX = 65000;
+            const truncated = plan.length > MAX
+              ? plan.slice(0, MAX) + '\n\n... (truncated — see artifact for full plan)'
+              : plan;
+
+            const body = `## Terraform Plan\n\n<details><summary>Click to expand</summary>\n\n\`\`\`terraform\n${truncated}\n\`\`\`\n</details>\n\n*Triggered by commit ${context.sha.slice(0,7)}*`;
+
+            // Delete previous plan comments to keep PR clean
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            for (const c of comments.filter(c => c.body.startsWith('## Terraform Plan'))) {
+              await github.rest.issues.deleteComment({
+                owner: context.repo.owner, repo: context.repo.repo, comment_id: c.id,
+              });
+            }
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
+
+  # ── Job 4: Terraform Apply (manual approval via GitHub Environment) ─────────
+  apply:
+    name: Terraform Apply
+    runs-on: ubuntu-latest
+    needs: plan
+    # Only run on main branch and only on manual dispatch with action=apply
+    if: |
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'apply')
+    # 'production' environment requires manual approval via GitHub Environment settings
+    environment: production
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Terraform ${{ env.TF_VERSION }}
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ secrets.AWS_REGION }}
+
+      - name: Terraform init
+        working-directory: ${{ env.TF_DIR }}
+        env:
+          TF_VAR_aws_region:      ${{ secrets.AWS_REGION }}
+          TF_VAR_aws_account_id:  ${{ secrets.AWS_ACCOUNT_ID }}
+        run: terraform init
+
+      - name: Download plan artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: tfplan-${{ github.run_id }}
+          path: ${{ env.TF_DIR }}
+
+      - name: Terraform apply (using saved plan)
+        working-directory: ${{ env.TF_DIR }}
+        env:
+          TF_VAR_aws_region:      ${{ secrets.AWS_REGION }}
+          TF_VAR_aws_account_id:  ${{ secrets.AWS_ACCOUNT_ID }}
+        run: terraform apply -auto-approve tfplan

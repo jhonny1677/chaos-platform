@@ -1,0 +1,39 @@
+---
+# Web UI service
+apiVersion: v1
+kind: Service
+metadata:
+  name: jenkins
+  namespace: jenkins
+  labels:
+    app: jenkins
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/path:   "/prometheus"
+    prometheus.io/port:   "8080"
+spec:
+  selector:
+    app: jenkins
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+  type: ClusterIP
+
+---
+# Agent tunnel service — build agents connect to this port
+apiVersion: v1
+kind: Service
+metadata:
+  name: jenkins-agent
+  namespace: jenkins
+  labels:
+    app: jenkins
+spec:
+  selector:
+    app: jenkins
+  ports:
+    - name: agent
+      port: 50000
+      targetPort: 50000
+  type: ClusterIP

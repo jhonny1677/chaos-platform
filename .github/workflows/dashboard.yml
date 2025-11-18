@@ -1,0 +1,198 @@
+# CI/CD pipeline for the React dashboard service.
+# Uses Node 20 instead of Python. No Bandit (JavaScript). npm audit replaces Python safety check.
+
+name: "dashboard — CI/CD"
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "chaos-platform/dashboard/**"
+      - ".github/workflows/dashboard.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "chaos-platform/dashboard/**"
+  workflow_dispatch:
+
+env:
+  SERVICE:     dashboard
+  SERVICE_DIR: chaos-platform/dashboard
+  ECR_REPO:    chaos-platform/dashboard
+  NODE_VER:    "20"
+
+jobs:
+  # ── Job 1: Test & Coverage ──────────────────────────────────────────────────
+  test:
+    name: Test & Coverage
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: chaos-platform/dashboard
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node ${{ env.NODE_VER }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VER }}
+          cache: npm
+          cache-dependency-path: chaos-platform/dashboard/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests with coverage (fail if below 70%)
+        run: |
+          # Requires vitest configured in package.json with coverage threshold
+          npm test -- --coverage --reporter=verbose || {
+            echo "⚠ Tests failed or not configured. Add Vitest to package.json."
+            exit 1
+          }
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-${{ env.SERVICE }}-${{ github.run_id }}
+          path: chaos-platform/dashboard/coverage/
+          retention-days: 30
+
+  # ── Job 2: Security Scan (no Bandit — Node project) ─────────────────────────
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    needs: test
+    defaults:
+      run:
+        working-directory: chaos-platform/dashboard
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node ${{ env.NODE_VER }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VER }}
+          cache: npm
+          cache-dependency-path: chaos-platform/dashboard/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Trivy — CRITICAL vulnerability scan (blocks pipeline)
+        uses: aquasecurity/trivy-action@0.18.0
+        with:
+          scan-type: fs
+          scan-ref:  chaos-platform/dashboard
+          severity:  CRITICAL
+          exit-code: "1"
+          format:    table
+
+      - name: Trivy — full SARIF report
+        uses: aquasecurity/trivy-action@0.18.0
+        with:
+          scan-type: fs
+          scan-ref:  chaos-platform/dashboard
+          format:    sarif
+          output:    trivy-${{ env.SERVICE }}.sarif
+          exit-code: "0"
+
+      - name: Upload Trivy SARIF report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: trivy-${{ env.SERVICE }}-${{ github.run_id }}
+          path: trivy-${{ env.SERVICE }}.sarif
+          retention-days: 30
+
+      - name: npm audit — fail on HIGH severity
+        run: |
+          npm audit --audit-level=high --json > npm-audit.json || true
+          # Print summary; fail if high/critical found
+          npm audit --audit-level=high
+
+      - name: Upload npm audit report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: npm-audit-${{ github.run_id }}
+          path: chaos-platform/dashboard/npm-audit.json
+          retention-days: 30
+
+  # ── Job 3: Build & Push to ECR ─────────────────────────────────────────────
+  build-push:
+    name: Build & Push to ECR
+    runs-on: ubuntu-latest
+    needs: security-scan
+    if: github.ref == 'refs/heads/main'
+    outputs:
+      image-uri: ${{ steps.push.outputs.image-uri }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ secrets.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push Docker image (multi-stage: node → nginx)
+        id: push
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          TAG="${GITHUB_SHA:0:7}"
+          IMAGE_BASE="${REGISTRY}/${{ env.ECR_REPO }}"
+
+          docker build \
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            --label "org.opencontainers.image.created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -t "${IMAGE_BASE}:${TAG}" \
+            -t "${IMAGE_BASE}:latest" \
+            chaos-platform/dashboard/
+
+          docker push "${IMAGE_BASE}:${TAG}"
+          docker push "${IMAGE_BASE}:latest"
+
+          echo "image-uri=${IMAGE_BASE}:${TAG}" >> "$GITHUB_OUTPUT"
+
+  # ── Job 4: Update K8s Manifest ─────────────────────────────────────────────
+  update-manifests:
+    name: Update K8s Image Tag
+    runs-on: ubuntu-latest
+    needs: build-push
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GH_PAT }}
+
+      - name: Patch image tag in deployment.yaml
+        env:
+          NEW_IMAGE: ${{ needs.build-push.outputs.image-uri }}
+          MANIFEST:  chaos-platform/dashboard/k8s/deployment.yaml
+        run: |
+          sed -i "s|image: .*dashboard.*|image: ${NEW_IMAGE}|g" "$MANIFEST"
+
+          git config user.name  "chaos-platform-bot"
+          git config user.email "bot@chaos-platform.local"
+          git add "$MANIFEST"
+
+          if git diff --cached --quiet; then
+            echo "Image tag unchanged — no commit needed."
+          else
+            git commit -m "ci: update dashboard image to ${NEW_IMAGE##*:} [skip ci]"
+            git push
+          fi

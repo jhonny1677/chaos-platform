@@ -1,0 +1,82 @@
+---
+# ServiceAccount for Jenkins pods (controller + agents)
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: jenkins
+  namespace: jenkins
+  labels:
+    app: jenkins
+  annotations:
+    # SECRET_REF: Replace with the Jenkins IRSA role ARN from Terraform output
+    eks.amazonaws.com/role-arn: "REPLACE_WITH_JENKINS_IRSA_ROLE_ARN"
+
+---
+# Role: Jenkins controller needs to create/manage agent pods in its namespace
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: jenkins-agent-manager
+  namespace: jenkins
+  labels:
+    app: jenkins
+rules:
+  - apiGroups: [""]
+    resources: [pods, pods/exec, pods/log, pods/portforward]
+    verbs:     [get, list, watch, create, update, patch, delete]
+  - apiGroups: [""]
+    resources: [services, endpoints]
+    verbs:     [get, list, watch]
+  - apiGroups: [""]
+    resources: [configmaps, secrets]
+    verbs:     [get, list, watch]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: jenkins-agent-manager
+  namespace: jenkins
+  labels:
+    app: jenkins
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind:     Role
+  name:     jenkins-agent-manager
+subjects:
+  - kind:      ServiceAccount
+    name:      jenkins
+    namespace: jenkins
+
+---
+# ClusterRole: Jenkins needs read access to pods in target namespaces
+# (for health checks and experiment monitoring)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: jenkins-cross-namespace-reader
+  labels:
+    app: jenkins
+rules:
+  - apiGroups: [""]
+    resources: [pods, pods/log, services, endpoints, namespaces]
+    verbs:     [get, list, watch]
+  - apiGroups: [apps]
+    resources: [deployments, replicasets]
+    verbs:     [get, list, watch]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: jenkins-cross-namespace-reader
+  labels:
+    app: jenkins
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind:     ClusterRole
+  name:     jenkins-cross-namespace-reader
+subjects:
+  - kind:      ServiceAccount
+    name:      jenkins
+    namespace: jenkins

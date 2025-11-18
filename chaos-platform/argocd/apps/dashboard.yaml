@@ -1,0 +1,45 @@
+# Sync wave 4: dashboard deploys last (depends on all services being up).
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: dashboard
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+    app.kubernetes.io/component: frontend
+  annotations:
+    argocd.argoproj.io/sync-wave: "4"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: chaos-platform
+
+  source:
+    repoURL:        https://github.com/jhonny1677/chaos-platform.git
+    targetRevision: HEAD
+    path:           chaos-platform/dashboard/k8s
+
+  destination:
+    server:    https://kubernetes.default.svc
+    namespace: chaos-engine   # Dashboard shares the chaos-engine namespace
+
+  syncPolicy:
+    automated:
+      prune:    true
+      selfHeal: true
+    retry:
+      limit: 5
+      backoff:
+        duration:    5s
+        factor:      2
+        maxDuration: 3m
+    syncOptions:
+      - CreateNamespace=false   # chaos-engine namespace already exists
+      - RespectIgnoreDifferences=true
+
+  ignoreDifferences:
+    - group: apps
+      kind:  Deployment
+      jsonPointers:
+        - /spec/replicas

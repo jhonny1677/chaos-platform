@@ -1,0 +1,46 @@
+# Sync wave -1: Vault and Sealed Secrets deploy after monitoring but before apps.
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: security-stack
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+    app.kubernetes.io/component: security
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: chaos-platform
+
+  source:
+    repoURL:        https://github.com/jhonny1677/chaos-platform.git
+    targetRevision: HEAD
+    path:           chaos-platform/k8s/security   # Vault, Sealed Secrets configs
+
+  destination:
+    server:    https://kubernetes.default.svc
+    namespace: vault
+
+  syncPolicy:
+    automated:
+      prune:    true
+      selfHeal: true
+    retry:
+      limit: 5
+      backoff:
+        duration:    5s
+        factor:      2
+        maxDuration: 3m
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+
+  ignoreDifferences:
+    # Vault agent injector patch is added dynamically by the operator
+    - group: admissionregistration.k8s.io
+      kind:  MutatingWebhookConfiguration
+      jsonPointers:
+        - /webhooks/0/clientConfig/caBundle

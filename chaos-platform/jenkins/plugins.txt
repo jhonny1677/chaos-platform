@@ -1,0 +1,35 @@
+# Jenkins plugins — installed at image build time via jenkins-plugin-cli.
+# Format: plugin-id:version  (use 'latest' to always pull newest stable)
+
+kubernetes:latest
+workflow-aggregator:latest
+workflow-job:latest
+workflow-cps:latest
+workflow-multibranch:latest
+git:latest
+github:latest
+github-branch-source:latest
+configuration-as-code:latest
+job-dsl:latest
+blueocean:latest
+aws-credentials:latest
+amazon-ecr:latest
+slack:latest
+prometheus:latest
+pipeline-stage-view:latest
+ansicolor:latest
+timestamper:latest
+credentials-binding:latest
+credentials:latest
+plain-credentials:latest
+ssh-credentials:latest
+matrix-auth:latest
+role-strategy:latest
+build-timeout:latest
+pipeline-utility-steps:latest
+http_request:latest
+junit:latest
+cobertura:latest
+htmlpublisher:latest
+email-ext:latest
+mailer:latest

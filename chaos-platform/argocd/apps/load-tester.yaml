@@ -1,0 +1,51 @@
+# Sync wave 3: load-tester deploys after chaos-engine.
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: load-tester
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+    app.kubernetes.io/component: load-testing
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: chaos-platform
+
+  source:
+    repoURL:        https://github.com/jhonny1677/chaos-platform.git
+    targetRevision: HEAD
+    path:           chaos-platform/load-tester/k8s
+
+  destination:
+    server:    https://kubernetes.default.svc
+    namespace: load-tester
+
+  syncPolicy:
+    automated:
+      prune:    true
+      selfHeal: true
+    retry:
+      limit: 5
+      backoff:
+        duration:    5s
+        factor:      2
+        maxDuration: 3m
+    syncOptions:
+      - CreateNamespace=true
+      - RespectIgnoreDifferences=true
+
+  ignoreDifferences:
+    # KEDA ScaledObject manages replicas — ArgoCD must not overwrite
+    - group: apps
+      kind:  Deployment
+      jsonPointers:
+        - /spec/replicas
+    # KEDA adds status fields that change constantly
+    - group: keda.sh
+      kind:  ScaledObject
+      jsonPointers:
+        - /status

@@ -1,0 +1,73 @@
+# ArgoCD AppProject — scopes all chaos-platform apps.
+# Restricts which source repos, destination clusters/namespaces, and
+# cluster resources are allowed. Prevents accidental cross-project deployments.
+
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: chaos-platform
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+spec:
+  description: "Chaos Engineering & Load Testing Platform — all application namespaces"
+
+  # Only this repo can deploy to chaos-platform namespaces
+  sourceRepos:
+    - "https://github.com/jhonny1677/chaos-platform.git"
+
+  # Destination namespaces this project is allowed to deploy to
+  destinations:
+    - server:    https://kubernetes.default.svc
+      namespace: target-app
+    - server:    https://kubernetes.default.svc
+      namespace: chaos-engine
+    - server:    https://kubernetes.default.svc
+      namespace: load-tester
+    - server:    https://kubernetes.default.svc
+      namespace: monitoring
+    - server:    https://kubernetes.default.svc
+      namespace: jenkins
+    - server:    https://kubernetes.default.svc
+      namespace: vault
+    - server:    https://kubernetes.default.svc
+      namespace: argocd
+
+  # Cluster-scoped resources this project may create
+  clusterResourceWhitelist:
+    - group: ""
+      kind:  Namespace
+    - group: rbac.authorization.k8s.io
+      kind:  ClusterRole
+    - group: rbac.authorization.k8s.io
+      kind:  ClusterRoleBinding
+    - group: storage.k8s.io
+      kind:  StorageClass
+    - group: apiextensions.k8s.io
+      kind:  CustomResourceDefinition
+    - group: admissionregistration.k8s.io
+      kind:  MutatingWebhookConfiguration
+    - group: admissionregistration.k8s.io
+      kind:  ValidatingWebhookConfiguration
+
+  # Namespace-scoped resources explicitly DENIED
+  namespaceResourceBlacklist:
+    # No raw Secrets — use SealedSecrets or Vault instead
+    - group: ""
+      kind:  Secret
+
+  # Roles within this project
+  roles:
+    - name: ci-deployer
+      description: "GitHub Actions / Jenkins CI role — can sync and read apps"
+      policies:
+        - "p, proj:chaos-platform:ci-deployer, applications, get,    chaos-platform/*, allow"
+        - "p, proj:chaos-platform:ci-deployer, applications, sync,   chaos-platform/*, allow"
+        - "p, proj:chaos-platform:ci-deployer, applications, action, chaos-platform/*, allow"
+      jwtTokens: []   # Generate tokens with: argocd proj role create-token chaos-platform ci-deployer
+
+    - name: read-only
+      description: "Read-only access — for dashboards and monitoring"
+      policies:
+        - "p, proj:chaos-platform:read-only, applications, get, chaos-platform/*, allow"
+      jwtTokens: []
