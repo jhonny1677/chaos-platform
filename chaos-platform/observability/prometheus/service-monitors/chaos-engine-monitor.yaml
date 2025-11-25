@@ -1,0 +1,39 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: chaos-engine
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+    app.kubernetes.io/part-of: chaos-platform
+spec:
+  selector:
+    matchLabels:
+      app: chaos-engine
+  namespaceSelector:
+    matchNames:
+      - chaos-engine
+  endpoints:
+    # Main API metrics on port 8001
+    - port: http
+      path: /metrics
+      interval: 15s
+      scrapeTimeout: 10s
+      relabelings:
+        - targetLabel: service
+          replacement: chaos-engine
+        - sourceLabels: [__meta_kubernetes_pod_name]
+          targetLabel: pod
+
+    # Dedicated Prometheus metrics port 9091 (separate from the API)
+    - port: metrics
+      path: /metrics
+      interval: 15s
+      scrapeTimeout: 10s
+      relabelings:
+        - targetLabel: service
+          replacement: chaos-engine
+        - targetLabel: metrics_port
+          replacement: "9091"
+        - sourceLabels: [__meta_kubernetes_pod_name]
+          targetLabel: pod

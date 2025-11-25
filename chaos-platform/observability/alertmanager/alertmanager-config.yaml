@@ -1,0 +1,125 @@
+# Alertmanager configuration for the Chaos Platform.
+#
+# Routing logic:
+#  - chaos-platform team alerts → #chaos-alerts Slack
+#  - critical k8s alerts        → #chaos-alerts Slack + email
+#  - SLO alerts                 → #slo-alerts Slack
+#  - everything else            → #chaos-alerts Slack (catch-all)
+#
+# All secrets (webhook URLs, SMTP password) are injected from environment
+# variables set by the K8s Secret — never hardcoded here.
+
+global:
+  # How long to wait before sending a resolved notification
+  resolve_timeout: 5m
+  # SMTP (for critical + SLO email notifications)
+  # SECRET_REF: SMTP_SMARTHOST / SMTP_FROM / SMTP_AUTH_PASSWORD from K8s Secret
+  smtp_smarthost:   "${SMTP_SMARTHOST}"
+  smtp_from:        "${SMTP_FROM}"
+  smtp_auth_username: "${SMTP_FROM}"
+  smtp_auth_password: "${SMTP_AUTH_PASSWORD}"
+  smtp_require_tls: true
+
+# ── Templates ─────────────────────────────────────────────────────────────────
+templates:
+  - /etc/alertmanager/templates/slack-template.tmpl
+  - /etc/alertmanager/templates/email-template.tmpl
+
+# ── Inhibition rules ──────────────────────────────────────────────────────────
+inhibit_rules:
+  # When all pods are down, suppress the error-rate alert — it's redundant and
+  # the higher-severity alert already captures the incident.
+  - source_matchers:
+      - alertname="TargetAppAllPodsDown"
+    target_matchers:
+      - alertname="TargetAppHighErrorRate"
+    equal: [namespace]
+
+  # When SLOFastBurnAlert fires suppress SLOSlowBurnAlert — the fast burn
+  # alert is more severe and actionable.
+  - source_matchers:
+      - alertname="SLOFastBurnAlert"
+    target_matchers:
+      - alertname="SLOSlowBurnAlert"
+    equal: [service]
+
+# ── Routing ───────────────────────────────────────────────────────────────────
+route:
+  # Group alerts so a single Slack message covers an entire namespace incident
+  group_by: [namespace, alertname]
+  group_wait:      30s    # Wait 30s for more alerts to group before sending first notification
+  group_interval:  5m     # Wait 5m before sending a new notification for the same group
+  repeat_interval: 4h     # Re-notify every 4h while an alert is still firing (warning)
+  receiver: chaos-alerts-slack  # Default receiver
+
+  routes:
+    # ── Critical alerts: Slack + email ─────────────────────────────────────────
+    - matchers:
+        - severity="critical"
+      receiver: critical-multi
+      repeat_interval: 1h   # Critical alerts re-fire every hour until resolved
+      continue: false
+
+    # ── SLO alerts → dedicated Slack channel ───────────────────────────────────
+    - matchers:
+        - slo=~".+"
+      receiver: slo-alerts-slack
+      group_by: [slo, alertname]
+      repeat_interval: 2h
+      continue: false
+
+    # ── Chaos platform warnings → chaos-alerts Slack ──────────────────────────
+    - matchers:
+        - team="chaos-platform"
+        - severity="warning"
+      receiver: chaos-alerts-slack
+      continue: false
+
+    # ── K8s platform alerts → chaos-alerts Slack ──────────────────────────────
+    - matchers:
+        - team="platform"
+      receiver: chaos-alerts-slack
+      continue: false
+
+# ── Receivers ─────────────────────────────────────────────────────────────────
+receivers:
+  - name: chaos-alerts-slack
+    slack_configs:
+      # SECRET_REF: SLACK_WEBHOOK_CHAOS set from K8s Secret
+      - api_url: "${SLACK_WEBHOOK_CHAOS}"
+        channel: "#chaos-alerts"
+        send_resolved: true
+        title:    '{{ template "slack.chaos.title" . }}'
+        text:     '{{ template "slack.chaos.text" . }}'
+        color:    '{{ template "slack.chaos.color" . }}'
+        icon_emoji: ":bell:"
+        actions:
+          - type: button
+            text: "Grafana Dashboard"
+            url: '{{ template "slack.chaos.dashboard_url" . }}'
+
+  - name: slo-alerts-slack
+    slack_configs:
+      # SECRET_REF: SLACK_WEBHOOK_SLO set from K8s Secret
+      - api_url: "${SLACK_WEBHOOK_SLO}"
+        channel: "#slo-alerts"
+        send_resolved: true
+        title:  '{{ template "slack.chaos.title" . }}'
+        text:   '{{ template "slack.chaos.text" . }}'
+        color:  '{{ template "slack.chaos.color" . }}'
+        icon_emoji: ":chart_with_downwards_trend:"
+
+  - name: critical-multi
+    slack_configs:
+      - api_url: "${SLACK_WEBHOOK_CHAOS}"
+        channel: "#chaos-alerts"
+        send_resolved: true
+        title:  '{{ template "slack.chaos.title" . }}'
+        text:   '{{ template "slack.chaos.text" . }}'
+        color:  '{{ template "slack.chaos.color" . }}'
+        icon_emoji: ":rotating_light:"
+    email_configs:
+      - to: "${ALERT_EMAIL_TO}"
+        html: '{{ template "email.chaos.html" . }}'
+        headers:
+          Subject: '{{ template "email.chaos.subject" . }}'

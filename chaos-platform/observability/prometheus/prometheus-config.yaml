@@ -1,0 +1,105 @@
+# Prometheus additional configuration.
+# This file is referenced by the Prometheus Operator via a PrometheusRule CR
+# and/or additionalScrapeConfigs secret. It supplements the ServiceMonitor-based
+# auto-discovery with static targets that ServiceMonitors cannot cover.
+
+global:
+  scrape_interval:     15s   # Default; individual jobs override as needed
+  evaluation_interval: 30s
+  scrape_timeout:      10s
+  external_labels:
+    cluster:     chaos-platform
+    environment: dev
+
+# ── Rule files ────────────────────────────────────────────────────────────────
+rule_files:
+  - /etc/prometheus/rules/chaos-platform-alerts.yaml
+  - /etc/prometheus/rules/target-app-alerts.yaml
+  - /etc/prometheus/rules/kubernetes-alerts.yaml
+  - /etc/prometheus/rules/slo-alerts.yaml
+
+# ── Alertmanager endpoints ────────────────────────────────────────────────────
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - alertmanager.monitoring:9093
+      timeout:         5s
+      api_version:     v2
+
+# ── Scrape configs ────────────────────────────────────────────────────────────
+scrape_configs:
+  # Prometheus itself
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  # OpenTelemetry collector — exposes Prometheus-compatible endpoint on 8889
+  - job_name: otel-collector
+    static_configs:
+      - targets: ["otel-collector.monitoring:8889"]
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: "otelcol_.*"
+        action: keep
+
+  # Kafka — JMX exporter sidecar on port 9308
+  - job_name: kafka
+    static_configs:
+      - targets: ["kafka.kafka:9308"]
+    scrape_interval: 30s   # Kafka JMX metrics are expensive to collect
+
+  # Redis — redis_exporter sidecar
+  - job_name: redis
+    static_configs:
+      - targets: ["redis-exporter.chaos-engine:9121"]
+
+  # Kubernetes API server
+  - job_name: kubernetes-apiservers
+    kubernetes_sd_configs:
+      - role: endpoints
+    scheme: https
+    tls_config:
+      ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+    bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+    relabel_configs:
+      - source_labels:
+          - __meta_kubernetes_namespace
+          - __meta_kubernetes_service_name
+          - __meta_kubernetes_endpoint_port_name
+        action: keep
+        regex: default;kubernetes;https
+
+  # Node exporter — deployed via kube-prometheus-stack
+  - job_name: node-exporter
+    kubernetes_sd_configs:
+      - role: pod
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
+        action: keep
+        regex: node-exporter
+      - source_labels: [__meta_kubernetes_pod_node_name]
+        target_label: node
+
+  # cAdvisor — container resource metrics
+  - job_name: cadvisor
+    kubernetes_sd_configs:
+      - role: node
+    scheme: https
+    tls_config:
+      ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+    bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+    relabel_configs:
+      - action: labelmap
+        regex: __meta_kubernetes_node_label_(.+)
+      - target_label: __address__
+        replacement: kubernetes.default.svc:443
+      - source_labels: [__meta_kubernetes_node_name]
+        regex: (.+)
+        target_label: __metrics_path__
+        replacement: /api/v1/nodes/$1/proxy/metrics/cadvisor
+    metric_relabel_configs:
+      # Drop high-cardinality container metrics we don't use
+      - source_labels: [__name__]
+        regex: "container_tasks_state|container_memory_failures_total"
+        action: drop

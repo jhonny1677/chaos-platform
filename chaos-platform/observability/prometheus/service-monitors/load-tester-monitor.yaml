@@ -1,0 +1,29 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: load-tester
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+    app.kubernetes.io/part-of: chaos-platform
+spec:
+  selector:
+    matchLabels:
+      app: load-tester
+  namespaceSelector:
+    matchNames:
+      - load-tester
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s
+      scrapeTimeout: 10s
+      relabelings:
+        - targetLabel: service
+          replacement: load-tester
+        - sourceLabels: [__meta_kubernetes_pod_name]
+          targetLabel: pod
+      metricRelabelings:
+        # Add test_id label from metric labels for per-test filtering
+        - sourceLabels: [test_id]
+          targetLabel: load_test_id

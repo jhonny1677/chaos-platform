@@ -1,0 +1,46 @@
+# This Secret is referenced by the Prometheus CR's additionalScrapeConfigs field.
+# It adds scrape targets that cannot be expressed as ServiceMonitors (static
+# endpoints, endpoints in other clusters, etc.).
+#
+# Apply with: kubectl apply -f observability/k8s/prometheus-additional-scrape.yaml
+# Reference in Prometheus CR:
+#   additionalScrapeConfigs:
+#     name: prometheus-additional-scrape
+#     key:  additional-scrape-configs.yaml
+
+apiVersion: v1
+kind: Secret
+metadata:
+  name: prometheus-additional-scrape
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+type: Opaque
+stringData:
+  additional-scrape-configs.yaml: |
+    # OTel collector metrics (Prometheus exporter port)
+    - job_name: otel-collector
+      static_configs:
+        - targets: ["otel-collector.monitoring:8889"]
+      metric_relabel_configs:
+        - source_labels: [__name__]
+          regex: "otelcol_.*"
+          action: keep
+
+    # Tempo self-metrics
+    - job_name: tempo
+      static_configs:
+        - targets: ["tempo.monitoring:3200"]
+      metrics_path: /metrics
+
+    # Redis exporter
+    - job_name: redis
+      static_configs:
+        - targets: ["redis-exporter.chaos-engine:9121"]
+      scrape_interval: 30s
+
+    # Kafka JMX exporter
+    - job_name: kafka
+      static_configs:
+        - targets: ["kafka.kafka:9308"]
+      scrape_interval: 30s

@@ -1,0 +1,97 @@
+groups:
+  - name: kubernetes-cluster
+    interval: 60s
+    rules:
+      # ── Node health ───────────────────────────────────────────────────────────
+      - alert: NodeNotReady
+        expr: kube_node_status_condition{condition="Ready", status="true"} == 0
+        for: 5m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "Kubernetes node {{ $labels.node }} is not ready"
+          description: >
+            Node {{ $labels.node }} has been in NotReady state for 5+ minutes.
+            Pods on this node are no longer schedulable and existing pods may
+            be evicted after the node eviction timeout.
+          runbook_url: "https://github.com/jhonny1677/chaos-platform/blob/main/docs/runbooks/node-not-ready.md"
+
+      # ── OOM kills ────────────────────────────────────────────────────────────
+      # OOM kills during chaos experiments are expected if memory stress is
+      # being injected — this alert exists to catch *unexpected* OOM kills.
+      - alert: PodOOMKilled
+        expr: |
+          kube_pod_container_status_last_terminated_reason{reason="OOMKilled"} == 1
+        for: 0m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Pod {{ $labels.pod }} was OOM killed"
+          description: >
+            Container {{ $labels.container }} in pod {{ $labels.pod }}
+            (namespace: {{ $labels.namespace }}) was killed by the OOM killer.
+            This is expected during memory-stress chaos experiments but should
+            be investigated in all other cases.
+          runbook_url: "https://github.com/jhonny1677/chaos-platform/blob/main/docs/runbooks/oom-killed.md"
+
+      # ── PVC capacity ─────────────────────────────────────────────────────────
+      # Catches Jenkins home, Tempo, and Loki PVCs filling up before they
+      # cause write failures.
+      - alert: PVCAlmostFull
+        expr: |
+          (
+            kubelet_volume_stats_used_bytes
+            / kubelet_volume_stats_capacity_bytes
+          ) * 100 > 85
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "PVC {{ $labels.persistentvolumeclaim }} is {{ $value | printf \"%.0f\" }}% full"
+          description: >
+            PersistentVolumeClaim {{ $labels.persistentvolumeclaim }} in namespace
+            {{ $labels.namespace }} is {{ $value | printf "%.1f" }}% full.
+            If it reaches 100% the associated pod will start failing writes.
+          runbook_url: "https://github.com/jhonny1677/chaos-platform/blob/main/docs/runbooks/pvc-almost-full.md"
+
+      # ── Deployment replicas ───────────────────────────────────────────────────
+      # Sustained replica mismatch indicates a broken rollout or a node
+      # with insufficient capacity to schedule pods.
+      - alert: DeploymentReplicasMismatch
+        expr: |
+          kube_deployment_spec_replicas
+          !=
+          kube_deployment_status_replicas_available
+        for: 10m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Deployment {{ $labels.deployment }} has unavailable replicas"
+          description: >
+            Deployment {{ $labels.deployment }} in namespace {{ $labels.namespace }}
+            has been running with fewer available replicas than desired for 10+ minutes.
+            Desired: {{ $labels.spec_replicas }}, Available: {{ $value }}.
+          runbook_url: "https://github.com/jhonny1677/chaos-platform/blob/main/docs/runbooks/deployment-replicas-mismatch.md"
+
+      # ── High pod restart rate ────────────────────────────────────────────────
+      # Five restarts in 1 hour is an aggressive threshold — catches
+      # pods in slow crash loops that don't trigger CrashLoopBackOff immediately.
+      - alert: HighPodRestartRate
+        expr: |
+          increase(kube_pod_container_status_restarts_total[1h]) > 5
+        for: 0m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Pod {{ $labels.pod }} restarted {{ $value | printf \"%.0f\" }} times in 1 hour"
+          description: >
+            Container {{ $labels.container }} in pod {{ $labels.pod }}
+            (namespace: {{ $labels.namespace }}) has restarted
+            {{ $value | printf "%.0f" }} times in the last hour.
+            Check pod logs: kubectl logs {{ $labels.pod }} -n {{ $labels.namespace }} --previous
+          runbook_url: "https://github.com/jhonny1677/chaos-platform/blob/main/docs/runbooks/high-restart-rate.md"

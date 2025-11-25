@@ -1,0 +1,35 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: target-app
+  namespace: monitoring
+  labels:
+    # release label must match the Prometheus Operator selector
+    release: kube-prometheus-stack
+    app.kubernetes.io/part-of: chaos-platform
+spec:
+  selector:
+    matchLabels:
+      app: target-app
+  namespaceSelector:
+    matchNames:
+      - target-app
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s
+      scrapeTimeout: 10s
+      relabelings:
+        # Add a consistent service label for PromQL grouping
+        - targetLabel: service
+          replacement: target-app
+        # Carry namespace into every metric for multi-tenant dashboards
+        - sourceLabels: [__meta_kubernetes_namespace]
+          targetLabel: namespace
+        - sourceLabels: [__meta_kubernetes_pod_name]
+          targetLabel: pod
+      metricRelabelings:
+        # Drop high-cardinality per-path histograms for paths we don't alert on
+        - sourceLabels: [__name__, path]
+          regex: "http_request_duration_seconds_bucket;/health.*"
+          action: drop

@@ -1,0 +1,98 @@
+# Promtail DaemonSet configuration.
+# Runs on every node to tail container logs and ship them to Loki.
+#
+# Key behaviours:
+#  1. Discovers pod log files via Kubernetes SD
+#  2. Adds K8s metadata labels (namespace, pod, container, node) to all entries
+#  3. Parses JSON log lines from our services automatically
+#  4. Drops noisy healthcheck log entries to save storage
+
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  # Stores the last-read position for each log file so restarts don't re-ship
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki.monitoring:3100/loki/api/v1/push
+    batchwait:    1s
+    batchsize:    1048576  # 1 MiB
+    timeout:      10s
+
+scrape_configs:
+  # ── Kubernetes pod logs ─────────────────────────────────────────────────────
+  - job_name: kubernetes-pods
+    kubernetes_sd_configs:
+      - role: pod
+
+    pipeline_stages:
+      # Stage 1: Parse JSON logs from our Python services
+      - match:
+          selector: '{namespace=~"target-app|chaos-engine|load-tester"}'
+          stages:
+            - json:
+                expressions:
+                  level:       level
+                  message:     message
+                  trace_id:    trace_id
+                  span_id:     span_id
+                  service:     service
+                  timestamp:   timestamp
+            - labels:
+                level:
+                service:
+            - timestamp:
+                source: timestamp
+                format: RFC3339
+
+      # Stage 2: Drop /health and /metrics endpoints — high volume, low value
+      - drop:
+          expression: '.*GET /health.*200.*|.*GET /metrics.*200.*'
+
+      # Stage 3: Set log level label for filtering in Grafana
+      - match:
+          selector: '{namespace="chaos-engine"}'
+          stages:
+            - regex:
+                expression: '.*"level":"(?P<level>[^"]+)".*'
+            - labels:
+                level:
+
+    relabel_configs:
+      # Only collect logs from our platform namespaces
+      - source_labels: [__meta_kubernetes_namespace]
+        action: keep
+        regex: "target-app|chaos-engine|load-tester|jenkins|monitoring|argocd"
+
+      # Attach Kubernetes metadata as Loki stream labels
+      - source_labels: [__meta_kubernetes_namespace]
+        target_label: namespace
+      - source_labels: [__meta_kubernetes_pod_name]
+        target_label: pod
+      - source_labels: [__meta_kubernetes_pod_container_name]
+        target_label: container
+      - source_labels: [__meta_kubernetes_pod_node_name]
+        target_label: node
+      - source_labels: [__meta_kubernetes_pod_label_app]
+        target_label: app
+
+      # Standard log file path from container runtime
+      - source_labels: [__meta_kubernetes_pod_uid, __meta_kubernetes_pod_container_name]
+        target_label: __path__
+        separator: /
+        replacement: /var/log/pods/*$1/*.log
+
+  # ── System component logs ───────────────────────────────────────────────────
+  - job_name: kubernetes-system
+    static_configs:
+      - targets: [localhost]
+        labels:
+          job: kubernetes-system
+          __path__: /var/log/kubernetes/**/*.log
+    pipeline_stages:
+      - regex:
+          expression: '^(?P<level>[IWEF])(?P<timestamp>[0-9]{4} [0-9:\.]+)\s+(?P<pid>[0-9]+) (?P<source>[^:]+):(?P<lineno>[0-9]+)\] (?P<message>.*)$'
+      - labels:
+          level:

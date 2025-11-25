@@ -1,0 +1,134 @@
+groups:
+  - name: target-app
+    interval: 30s
+    rules:
+      # ── Error rate ────────────────────────────────────────────────────────────
+      # 5xx responses sustained for 2m is our first indicator that a chaos
+      # experiment has exceeded the blast radius or the app has a regression.
+      - alert: TargetAppHighErrorRate
+        expr: |
+          (
+            sum(rate(http_requests_total{job="target-app", status=~"5.."}[2m]))
+            /
+            sum(rate(http_requests_total{job="target-app"}[2m]))
+          ) * 100 > 5
+        for: 2m
+        labels:
+          severity: warning
+          team: target-app
+          service: target-app
+        annotations:
+          summary: "Target app HTTP error rate above 5%"
+          description: >
+            The HTTP 5xx error rate for target-app is {{ $value | printf "%.2f" }}%
+            — above the 5% SLO threshold for the past 2 minutes.
+            Correlate with active chaos experiments in the Chaos Platform dashboard.
+          runbook_url: "https://github.com/jhonny1677/chaos-platform/blob/main/docs/runbooks/target-app-error-rate.md"
+
+      # ── Latency ───────────────────────────────────────────────────────────────
+      - alert: TargetAppHighLatency
+        expr: |
+          histogram_quantile(0.99,
+            sum(rate(http_request_duration_seconds_bucket{job="target-app"}[5m])) by (le)
+          ) > 1
+        for: 5m
+        labels:
+          severity: warning
+          team: target-app
+          service: target-app
+        annotations:
+          summary: "Target app p99 latency above 1 second"
+          description: >
+            p99 request latency is {{ $value | humanizeDuration }} — above the 1s
+            threshold for 5 consecutive minutes. This often indicates CPU saturation
+            or a downstream dependency (DB / Redis) is slow.
+          runbook_url: "https://github.com/jhonny1677/chaos-platform/blob/main/docs/runbooks/target-app-latency.md"
+
+      # ── Crash loop ───────────────────────────────────────────────────────────
+      # More than 3 restarts in 15 minutes is a strong signal of OOM or panic.
+      - alert: TargetAppPodCrashLooping
+        expr: |
+          rate(kube_pod_container_status_restarts_total{
+            namespace="target-app", container="target-app"
+          }[15m]) * 60 * 15 > 3
+        for: 5m
+        labels:
+          severity: warning
+          team: target-app
+        annotations:
+          summary: "Target app pod is crash looping"
+          description: >
+            Pod {{ $labels.pod }} has restarted {{ $value | printf "%.0f" }} times
+            in the last 15 minutes. Check pod logs and events for OOM or panic signals.
+          runbook_url: "https://github.com/jhonny1677/chaos-platform/blob/main/docs/runbooks/pod-crash-loop.md"
+
+      # ── All pods down ─────────────────────────────────────────────────────────
+      # Critical: service is completely offline. Suppress HighErrorRate when
+      # this fires (configured in Alertmanager inhibition rules).
+      - alert: TargetAppAllPodsDown
+        expr: |
+          sum(kube_pod_status_ready{
+            namespace="target-app", condition="true"
+          }) == 0
+        for: 1m
+        labels:
+          severity: critical
+          team: target-app
+        annotations:
+          summary: "All target-app pods are down — service unavailable"
+          description: >
+            There are zero ready pods in the target-app namespace. The service is
+            completely unavailable. This may be caused by a chaos pod-kill experiment
+            that exceeded the configured blast radius.
+          runbook_url: "https://github.com/jhonny1677/chaos-platform/blob/main/docs/runbooks/all-pods-down.md"
+
+      # ── CPU pressure ──────────────────────────────────────────────────────────
+      - alert: TargetAppHighCPU
+        expr: |
+          sum by (pod) (
+            rate(container_cpu_usage_seconds_total{
+              namespace="target-app", container="target-app"
+            }[5m])
+          )
+          /
+          sum by (pod) (
+            kube_pod_container_resource_limits{
+              namespace="target-app", resource="cpu"
+            }
+          ) * 100 > 80
+        for: 10m
+        labels:
+          severity: warning
+          team: target-app
+        annotations:
+          summary: "Target app CPU usage above 80% of limit"
+          description: >
+            Pod {{ $labels.pod }} CPU usage is {{ $value | printf "%.1f" }}% of
+            its configured limit for 10+ minutes. The pod may be CPU-throttled,
+            increasing latency. Consider increasing the CPU limit or scaling out.
+          runbook_url: "https://github.com/jhonny1677/chaos-platform/blob/main/docs/runbooks/target-app-cpu.md"
+
+      # ── Memory pressure ───────────────────────────────────────────────────────
+      - alert: TargetAppMemoryPressure
+        expr: |
+          sum by (pod) (
+            container_memory_working_set_bytes{
+              namespace="target-app", container="target-app"
+            }
+          )
+          /
+          sum by (pod) (
+            kube_pod_container_resource_limits{
+              namespace="target-app", resource="memory"
+            }
+          ) * 100 > 85
+        for: 5m
+        labels:
+          severity: warning
+          team: target-app
+        annotations:
+          summary: "Target app memory usage above 85% of limit"
+          description: >
+            Pod {{ $labels.pod }} working-set memory is {{ $value | printf "%.1f" }}%
+            of its limit. OOM kill is likely imminent if memory keeps growing.
+          runbook_url: "https://github.com/jhonny1677/chaos-platform/blob/main/docs/runbooks/target-app-memory.md"

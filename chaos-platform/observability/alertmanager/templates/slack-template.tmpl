@@ -1,0 +1,50 @@
+{{/* Slack notification templates for the Chaos Platform */}}
+
+{{/* ── Title ──────────────────────────────────────────────────────────────── */}}
+{{ define "slack.chaos.title" -}}
+  {{ if eq .Status "firing" -}}
+    :red_circle: [{{ .CommonLabels.severity | toUpper }}] {{ .CommonLabels.alertname }}
+  {{- else -}}
+    :large_green_circle: [RESOLVED] {{ .CommonLabels.alertname }}
+  {{- end }}
+{{- end }}
+
+{{/* ── Color ──────────────────────────────────────────────────────────────── */}}
+{{ define "slack.chaos.color" -}}
+  {{ if eq .Status "resolved" -}}
+    good
+  {{- else if eq .CommonLabels.severity "critical" -}}
+    danger
+  {{- else -}}
+    warning
+  {{- end }}
+{{- end }}
+
+{{/* ── Dashboard URL (links to relevant Grafana dashboard by service) ──────── */}}
+{{ define "slack.chaos.dashboard_url" -}}
+  {{- $svc := .CommonLabels.service -}}
+  {{- if eq $svc "chaos-engine" -}}
+    http://grafana.monitoring/d/chaos-platform-overview/chaos-platform-overview
+  {{- else if eq $svc "load-tester" -}}
+    http://grafana.monitoring/d/load-test-results/load-test-results
+  {{- else if eq $svc "target-app" -}}
+    http://grafana.monitoring/d/target-app-health/target-app-health
+  {{- else -}}
+    http://grafana.monitoring/d/chaos-platform-overview/chaos-platform-overview
+  {{- end -}}
+{{- end }}
+
+{{/* ── Body text ───────────────────────────────────────────────────────────── */}}
+{{ define "slack.chaos.text" -}}
+{{ range .Alerts -}}
+*Alert:* {{ .Annotations.summary }}
+*Severity:* `{{ .Labels.severity }}`
+{{ if .Labels.namespace }}*Namespace:* `{{ .Labels.namespace }}`{{ end }}
+{{ if .Labels.pod }}*Pod:* `{{ .Labels.pod }}`{{ end }}
+*Description:* {{ .Annotations.description }}
+{{ if .Annotations.runbook_url }}*Runbook:* <{{ .Annotations.runbook_url }}|View Runbook>{{ end }}
+*Started:* {{ .StartsAt | since }}
+{{ if eq .Status "resolved" }}*Duration:* {{ duration .StartsAt .EndsAt }}{{ end }}
+---
+{{ end -}}
+{{- end }}

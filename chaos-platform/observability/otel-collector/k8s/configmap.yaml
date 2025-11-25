@@ -1,0 +1,86 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-collector-config
+  namespace: monitoring
+  labels:
+    app: otel-collector
+    app.kubernetes.io/part-of: chaos-platform
+data:
+  # The config file is mounted at /conf/otel-collector-config.yaml
+  # Changes here trigger a pod restart via the Deployment's checksum annotation.
+  otel-collector-config.yaml: |
+    # See observability/otel-collector/otel-collector-config.yaml for the full
+    # annotated version. This is the runtime copy.
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+      prometheus:
+        config:
+          scrape_configs:
+            - job_name: otel-collector-self
+              scrape_interval: 30s
+              static_configs:
+                - targets: ["localhost:8888"]
+
+    processors:
+      memory_limiter:
+        check_interval: 5s
+        limit_mib: 400
+        spike_limit_mib: 100
+      batch:
+        timeout: 5s
+        send_batch_size: 512
+      resourcedetection:
+        detectors: [env, k8snode]
+        timeout: 5s
+      k8sattributes:
+        auth_type: serviceAccount
+        extract:
+          metadata:
+            - k8s.pod.name
+            - k8s.namespace.name
+            - k8s.node.name
+            - k8s.deployment.name
+
+    exporters:
+      prometheus:
+        endpoint: "0.0.0.0:8889"
+        namespace: otel
+      loki:
+        endpoint: http://loki.monitoring:3100/loki/api/v1/push
+        labels:
+          attributes:
+            service.name: service
+            k8s.namespace.name: namespace
+            k8s.pod.name: pod
+      otlp/tempo:
+        endpoint: http://tempo.monitoring:4317
+        tls:
+          insecure: true
+      logging:
+        verbosity: normal
+
+    extensions:
+      health_check:
+        endpoint: 0.0.0.0:13133
+
+    service:
+      extensions: [health_check]
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [memory_limiter, resourcedetection, k8sattributes, batch]
+          exporters: [otlp/tempo]
+        metrics:
+          receivers: [otlp, prometheus]
+          processors: [memory_limiter, resourcedetection, k8sattributes, batch]
+          exporters: [prometheus]
+        logs:
+          receivers: [otlp]
+          processors: [memory_limiter, resourcedetection, k8sattributes, batch]
+          exporters: [loki]

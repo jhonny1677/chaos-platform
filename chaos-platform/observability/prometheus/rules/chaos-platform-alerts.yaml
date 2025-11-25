@@ -1,0 +1,103 @@
+groups:
+  - name: chaos-platform
+    interval: 30s
+    rules:
+      # ── Chaos Engine availability ─────────────────────────────────────────────
+      - alert: ChaosEngineDown
+        expr: absent(up{job="chaos-engine"} == 1)
+        for: 2m
+        labels:
+          severity: critical
+          team: chaos-platform
+          service: chaos-engine
+        annotations:
+          summary: "Chaos Engine is down"
+          description: >
+            The Chaos Engine pod has not reported a healthy scrape target for 2 minutes.
+            All chaos experiments are paused and scheduled jobs will not fire.
+          runbook_url: "https://github.com/jhonny1677/chaos-platform/blob/main/docs/runbooks/chaos-engine-down.md"
+
+      # ── Load Tester availability ──────────────────────────────────────────────
+      - alert: LoadTesterDown
+        expr: absent(up{job="load-tester"} == 1)
+        for: 2m
+        labels:
+          severity: critical
+          team: chaos-platform
+          service: load-tester
+        annotations:
+          summary: "Load Tester is down"
+          description: >
+            The Load Tester pod has not reported a healthy scrape target for 2 minutes.
+            No new load tests can be started and in-progress tests may be orphaned.
+          runbook_url: "https://github.com/jhonny1677/chaos-platform/blob/main/docs/runbooks/load-tester-down.md"
+
+      # ── Stuck experiment ──────────────────────────────────────────────────────
+      # A chaos experiment should never run longer than ~15 minutes in normal
+      # operation. One hour signals that the experiment worker is hung or the
+      # finalizer never fired.
+      - alert: ExperimentStuck
+        expr: chaos_experiment_running_duration_seconds{status="running"} > 3600
+        for: 0m
+        labels:
+          severity: warning
+          team: chaos-platform
+        annotations:
+          summary: "Chaos experiment stuck in running state for over 1 hour"
+          description: >
+            Experiment {{ $labels.experiment_id }} (type: {{ $labels.experiment_type }})
+            has been in 'running' state for {{ $value | humanizeDuration }}.
+            The experiment worker may be hung or the completion callback failed.
+          runbook_url: "https://github.com/jhonny1677/chaos-platform/blob/main/docs/runbooks/experiment-stuck.md"
+
+      # ── Kafka consumer lag ───────────────────────────────────────────────────
+      # High lag means chaos events are not being consumed fast enough,
+      # which causes WebSocket updates to fall behind real-time state.
+      - alert: KafkaConsumerLag
+        expr: kafka_consumer_group_lag{group=~"chaos-.*|load-tester-.*"} > 10000
+        for: 5m
+        labels:
+          severity: warning
+          team: chaos-platform
+        annotations:
+          summary: "Kafka consumer group lag exceeds 10 000 messages"
+          description: >
+            Consumer group {{ $labels.group }} on topic {{ $labels.topic }} has
+            a lag of {{ $value | humanize }} messages. Dashboard live updates
+            and experiment state may be significantly delayed.
+          runbook_url: "https://github.com/jhonny1677/chaos-platform/blob/main/docs/runbooks/kafka-consumer-lag.md"
+
+      # ── Redis memory ──────────────────────────────────────────────────────────
+      # Redis holds live load-test stats. If it evicts keys the dashboard
+      # will show incomplete real-time metrics.
+      - alert: RedisMemoryHigh
+        expr: redis_memory_used_bytes / redis_memory_max_bytes * 100 > 80
+        for: 5m
+        labels:
+          severity: warning
+          team: chaos-platform
+        annotations:
+          summary: "Redis memory usage above 80%"
+          description: >
+            Redis instance {{ $labels.instance }} is using {{ $value | printf "%.1f" }}%
+            of its configured maxmemory limit. Key eviction may start soon, causing
+            incomplete live stats on the load-test dashboard.
+          runbook_url: "https://github.com/jhonny1677/chaos-platform/blob/main/docs/runbooks/redis-memory-high.md"
+
+      # ── Hypothesis failure rate ───────────────────────────────────────────────
+      # A burst of hypothesis failures suggests the system is failing to recover
+      # from chaos injection — circuit breaker may be open.
+      - alert: HypothesisFailureRateHigh
+        expr: increase(chaos_hypothesis_failed_total[10m]) > 3
+        for: 0m
+        labels:
+          severity: warning
+          team: chaos-platform
+        annotations:
+          summary: "More than 3 hypothesis failures in the last 10 minutes"
+          description: >
+            {{ $value }} hypothesis failures recorded in the last 10 minutes.
+            The system is not meeting its steady-state thresholds during chaos injection.
+            Check whether the chaos blast radius is too large or the target app
+            is already degraded.
+          runbook_url: "https://github.com/jhonny1677/chaos-platform/blob/main/docs/runbooks/hypothesis-failures.md"

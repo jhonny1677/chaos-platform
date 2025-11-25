@@ -1,0 +1,135 @@
+# SLO Alert Rules — target-app availability SLO
+#
+# SLO Definition:
+#   - Availability: 99.5% of requests succeed (error budget = 0.5%)
+#   - Latency SLO:  p99 latency < 500ms for 99% of 5-minute windows
+#
+# Multi-window burn rate alerts follow the Google SRE Workbook approach.
+# Two alerts per SLO: fast burn (catches acute incidents) + slow burn
+# (catches gradual degradation that evades short-window alerts).
+#
+# Burn rate thresholds:
+#   Fast burn  (1h window):  error rate > 14 × 0.5% = 7.0%  → exhausts budget in ~3 days
+#   Slow burn  (6h window):  error rate >  3 × 0.5% = 1.5%  → exhausts budget in ~14 days
+#
+# Recording rules make the dashboard and alerts cheaper to evaluate.
+
+groups:
+  - name: slo-recording
+    interval: 60s
+    rules:
+      # 5-minute error ratio
+      - record: job:http_error_ratio:rate5m
+        expr: |
+          sum(rate(http_requests_total{job="target-app", status=~"5.."}[5m]))
+          /
+          sum(rate(http_requests_total{job="target-app"}[5m]))
+
+      # 1-hour error ratio
+      - record: job:http_error_ratio:rate1h
+        expr: |
+          sum(rate(http_requests_total{job="target-app", status=~"5.."}[1h]))
+          /
+          sum(rate(http_requests_total{job="target-app"}[1h]))
+
+      # 6-hour error ratio
+      - record: job:http_error_ratio:rate6h
+        expr: |
+          sum(rate(http_requests_total{job="target-app", status=~"5.."}[6h]))
+          /
+          sum(rate(http_requests_total{job="target-app"}[6h]))
+
+      # 30-day error ratio (used for error budget remaining panel)
+      - record: job:http_error_ratio:rate30d
+        expr: |
+          sum(rate(http_requests_total{job="target-app", status=~"5.."}[30d]))
+          /
+          sum(rate(http_requests_total{job="target-app"}[30d]))
+
+      # Error budget remaining (fraction, 1 = 100% remaining)
+      - record: job:slo_error_budget_remaining:ratio
+        expr: |
+          1 - (job:http_error_ratio:rate30d / 0.005)
+
+  - name: slo-alerts
+    rules:
+      # ── Fast burn alert ───────────────────────────────────────────────────────
+      # Fires when a 1-hour window AND a 5-minute window both show error rate
+      # above 14× the SLO threshold. The dual-window requirement prevents
+      # false positives from a single short spike.
+      - alert: SLOFastBurnAlert
+        expr: |
+          job:http_error_ratio:rate1h > (14 * 0.005)
+          and
+          job:http_error_ratio:rate5m > (14 * 0.005)
+        for: 1m
+        labels:
+          severity: critical
+          team: target-app
+          slo: availability
+        annotations:
+          summary: "SLO fast burn: error budget exhausting 14× faster than normal"
+          description: >
+            The 1-hour error ratio is {{ $value | printf "%.3f" }} (threshold: 0.07).
+            At this rate the monthly error budget will be exhausted in ~3 days.
+            Immediate investigation required.
+          runbook_url: "https://github.com/jhonny1677/chaos-platform/blob/main/docs/runbooks/slo-fast-burn.md"
+
+      # ── Slow burn alert ───────────────────────────────────────────────────────
+      # Fires when a 6-hour AND 30-minute window both show a 3× burn rate.
+      # This catches gradual degradation that the fast burn alert would miss.
+      - alert: SLOSlowBurnAlert
+        expr: |
+          job:http_error_ratio:rate6h > (3 * 0.005)
+          and
+          sum(rate(http_requests_total{job="target-app", status=~"5.."}[30m]))
+          /
+          sum(rate(http_requests_total{job="target-app"}[30m])) > (3 * 0.005)
+        for: 5m
+        labels:
+          severity: warning
+          team: target-app
+          slo: availability
+        annotations:
+          summary: "SLO slow burn: error budget exhausting 3× faster than normal"
+          description: >
+            The 6-hour error ratio is {{ $value | printf "%.3f" }} (threshold: 0.015).
+            At this rate the monthly error budget will be exhausted in ~14 days.
+            Investigate and remediate before the situation escalates.
+          runbook_url: "https://github.com/jhonny1677/chaos-platform/blob/main/docs/runbooks/slo-slow-burn.md"
+
+      # ── Error budget exhausted ────────────────────────────────────────────────
+      # This should never fire in production — if it does, all non-critical
+      # deployments and chaos experiments should stop immediately.
+      - alert: ErrorBudgetExhausted
+        expr: job:slo_error_budget_remaining:ratio < 0.10
+        for: 5m
+        labels:
+          severity: critical
+          team: target-app
+          slo: availability
+        annotations:
+          summary: "SLO error budget below 10% for the month"
+          description: >
+            Only {{ $value | printf "%.1f" }}% of the monthly error budget remains.
+            All non-emergency deployments and chaos experiments should be halted
+            until the budget is replenished at month rollover.
+          runbook_url: "https://github.com/jhonny1677/chaos-platform/blob/main/docs/runbooks/error-budget-exhausted.md"
+
+      # ── Latency SLO burn ──────────────────────────────────────────────────────
+      - alert: LatencySLOBurn
+        expr: |
+          histogram_quantile(0.99,
+            sum(rate(http_request_duration_seconds_bucket{job="target-app"}[1h])) by (le)
+          ) > 0.500
+        for: 10m
+        labels:
+          severity: warning
+          team: target-app
+          slo: latency
+        annotations:
+          summary: "Latency SLO breach: p99 above 500ms for 10+ minutes"
+          description: >
+            The 1-hour p99 latency is {{ $value | humanizeDuration }}
+            — above the 500ms latency SLO target.
+          runbook_url: "https://github.com/jhonny1677/chaos-platform/blob/main/docs/runbooks/latency-slo-burn.md"

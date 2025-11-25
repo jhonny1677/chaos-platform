@@ -1,0 +1,123 @@
+# Loki configuration for the Chaos Platform.
+#
+# Storage: S3 — uses the same S3 bucket created by Terraform, under prefix
+# loki/. In dev this is intentionally NOT the same prefix as Terraform state.
+#
+# Retention: 30 days via compactor. Loki applies retention by rewriting
+# chunks, not just deleting index entries, so compactor must be enabled.
+
+auth_enabled: false   # Single-tenant; all data goes to the default org
+
+server:
+  http_listen_port: 3100
+  grpc_listen_port: 9095
+  log_level: info
+
+common:
+  path_prefix: /loki
+  replication_factor: 1   # Single replica — dev mode
+  ring:
+    kvstore:
+      store: inmemory
+
+# ── Ingester ──────────────────────────────────────────────────────────────────
+ingester:
+  chunk_idle_period:    3m
+  chunk_block_size:     262144
+  chunk_retain_period:  1m
+  # Snappy gives ~50% compression with very low CPU cost
+  chunk_encoding:       snappy
+  max_transfer_retries: 0
+  wal:
+    enabled: true
+    dir: /loki/wal
+
+# ── Schema ────────────────────────────────────────────────────────────────────
+schema_config:
+  configs:
+    - from: 2024-01-01
+      store:        tsdb
+      object_store: s3
+      schema:       v12
+      index:
+        prefix: loki_index_
+        period: 24h
+
+# ── Storage ───────────────────────────────────────────────────────────────────
+storage_config:
+  tsdb_shipper:
+    active_index_directory: /loki/index
+    cache_location:          /loki/index-cache
+    cache_ttl:              24h
+  aws:
+    # SECRET_REF: Bucket name injected from env var set by the K8s ConfigMap
+    s3: s3://${LOKI_S3_BUCKET}/loki/
+    region: ${AWS_REGION}
+    # IRSA provides credentials — no access key needed
+    sse_encryption: true
+
+# ── Compactor (handles retention) ────────────────────────────────────────────
+compactor:
+  working_directory:    /loki/compactor
+  shared_store:         s3
+  compaction_interval:  10m
+  retention_enabled:    true
+  retention_delete_delay:   2h
+  retention_delete_worker_count: 150
+
+# ── Limits (global defaults) ──────────────────────────────────────────────────
+limits_config:
+  retention_period:     720h   # 30 days
+  ingestion_rate_mb:    16
+  ingestion_burst_size_mb: 32
+  per_stream_rate_limit:    3MB
+  per_stream_rate_limit_burst: 15MB
+  max_query_series:     5000
+  max_query_parallelism: 32
+  split_queries_by_interval: 24h
+
+# ── Ruler (generates metrics from log patterns) ───────────────────────────────
+ruler:
+  storage:
+    type: local
+    local:
+      directory: /loki/rules
+  rule_path: /loki/rules-temp
+  alertmanager_url: http://alertmanager.monitoring:9093
+  enable_api: true
+
+# Rules to generate metrics from log patterns
+# These are stored as Loki ruler rules (similar to Prometheus recording rules)
+# File path: /loki/rules/chaos-platform/rules.yaml
+#
+# groups:
+#   - name: log-derived-metrics
+#     rules:
+#       - record: job:log_error_total:rate5m
+#         expr: |
+#           sum by (service) (
+#             rate({namespace=~"target-app|chaos-engine|load-tester"}
+#               |= "level=error" [5m])
+#           )
+#
+#       - record: job:chaos_events_total:rate5m
+#         expr: |
+#           sum by (experiment_type) (
+#             rate({namespace="chaos-engine"}
+#               | json | level="info" | message=~".*chaos.*event.*" [5m])
+#           )
+
+# ── Query range ───────────────────────────────────────────────────────────────
+query_range:
+  results_cache:
+    cache:
+      embedded_cache:
+        enabled:   true
+        max_size_mb: 100
+
+query_scheduler:
+  max_outstanding_requests_per_tenant: 256
+
+frontend:
+  max_outstanding_per_tenant: 256
+  compress_responses: true

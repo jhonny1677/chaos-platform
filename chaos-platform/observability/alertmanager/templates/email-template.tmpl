@@ -1,0 +1,72 @@
+{{/* Email notification templates for critical alerts */}}
+
+{{ define "email.chaos.subject" -}}
+  [{{ .Status | toUpper }}] {{ .CommonLabels.alertname }} — Chaos Platform
+{{- end }}
+
+{{ define "email.chaos.html" -}}
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+  body  { font-family: Arial, sans-serif; background: #f4f4f4; margin: 0; padding: 20px; }
+  .card { background: #fff; border-radius: 8px; padding: 24px; max-width: 600px; margin: 0 auto;
+          box-shadow: 0 2px 4px rgba(0,0,0,.1); }
+  .header { padding: 12px 16px; border-radius: 6px; margin-bottom: 20px; }
+  .firing   { background: #fee2e2; border-left: 4px solid #dc2626; }
+  .resolved { background: #dcfce7; border-left: 4px solid #16a34a; }
+  h2 { margin: 0 0 4px; font-size: 18px; }
+  .severity { display: inline-block; padding: 2px 8px; border-radius: 4px;
+              font-size: 12px; font-weight: bold; text-transform: uppercase; }
+  .critical { background: #dc2626; color: #fff; }
+  .warning  { background: #d97706; color: #fff; }
+  table { width: 100%; border-collapse: collapse; margin: 16px 0; }
+  th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid #e5e7eb; }
+  th { background: #f9fafb; font-weight: 600; font-size: 13px; color: #374151; }
+  td { font-size: 14px; color: #1f2937; }
+  .btn { display: inline-block; padding: 10px 20px; border-radius: 6px; text-decoration: none;
+         font-weight: bold; margin-right: 8px; margin-top: 16px; }
+  .btn-grafana  { background: #f97316; color: #fff; }
+  .btn-runbook  { background: #2563eb; color: #fff; }
+  .footer { margin-top: 24px; font-size: 12px; color: #9ca3af; border-top: 1px solid #e5e7eb; padding-top: 12px; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="header {{ if eq .Status "resolved" }}resolved{{ else }}firing{{ end }}">
+    <h2>
+      {{ if eq .Status "firing" }}🔴{{ else }}🟢{{ end }}
+      {{ .CommonLabels.alertname }}
+    </h2>
+    <span class="severity {{ .CommonLabels.severity }}">{{ .CommonLabels.severity }}</span>
+    &nbsp;
+    <span style="font-size: 13px; color: #6b7280;">{{ .Status | toUpper }}</span>
+  </div>
+
+  {{ range .Alerts }}
+  <table>
+    <tr><th>Field</th><th>Value</th></tr>
+    <tr><td><strong>Summary</strong></td><td>{{ .Annotations.summary }}</td></tr>
+    {{ if .Labels.namespace }}<tr><td>Namespace</td><td><code>{{ .Labels.namespace }}</code></td></tr>{{ end }}
+    {{ if .Labels.pod }}<tr><td>Pod</td><td><code>{{ .Labels.pod }}</code></td></tr>{{ end }}
+    {{ if .Labels.service }}<tr><td>Service</td><td><code>{{ .Labels.service }}</code></td></tr>{{ end }}
+    <tr><td>Started</td><td>{{ .StartsAt.Format "2006-01-02 15:04:05 UTC" }}</td></tr>
+    {{ if eq $.Status "resolved" }}<tr><td>Resolved</td><td>{{ .EndsAt.Format "2006-01-02 15:04:05 UTC" }}</td></tr>{{ end }}
+    <tr><td colspan="2" style="padding-top: 12px; color: #374151;">{{ .Annotations.description }}</td></tr>
+  </table>
+
+  {{ if .Annotations.runbook_url }}
+  <a class="btn btn-runbook" href="{{ .Annotations.runbook_url }}">View Runbook</a>
+  {{ end }}
+  <a class="btn btn-grafana" href="http://grafana.monitoring/d/chaos-platform-overview/chaos-platform-overview">Open Grafana</a>
+  {{ end }}
+
+  <div class="footer">
+    Sent by Alertmanager — Chaos Platform |
+    <a href="http://alertmanager.monitoring">Silence this alert</a>
+  </div>
+</div>
+</body>
+</html>
+{{- end }}

@@ -1,0 +1,14 @@
+apiVersion: 1
+
+providers:
+  - name: chaos-platform
+    orgId: 1
+    type: file
+    disableDeletion: false   # Allow deleting dashboards from the UI
+    updateIntervalSeconds: 30
+    allowUiUpdates: true     # Saves made in the UI persist back to the JSON files
+    options:
+      path: /var/lib/grafana/dashboards/chaos-platform
+      foldersFromFilesStructure: false
+    folder: "Chaos Platform"
+    folderUid: chaos-platform

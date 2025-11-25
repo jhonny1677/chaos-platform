@@ -1,0 +1,88 @@
+# Grafana Tempo configuration.
+#
+# Storage: local PVC (20Gi) for dev.
+# For production, switch to S3 — the commented block below shows how.
+#
+# Trace-to-logs and trace-to-metrics correlation is configured in
+# Grafana datasources (observability/grafana/datasources/datasources.yaml).
+
+server:
+  http_listen_port: 3200
+  log_level:        info
+
+distributor:
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:4317
+        http:
+          endpoint: 0.0.0.0:4318
+
+ingester:
+  max_block_duration: 5m
+  trace_idle_period:  10s
+  flush_check_period: 10s
+
+compactor:
+  compaction:
+    block_retention:    72h   # 3 days — keep traces long enough to correlate with weekly reports
+    compacted_block_retention: 1h
+
+querier:
+  frontend_worker:
+    frontend_address: tempo.monitoring:9095
+
+query_frontend:
+  search:
+    max_duration:       168h  # Allow querying up to 7 days back
+    default_result_limit: 20
+    max_result_limit:     200
+  trace_by_id:
+    query_shards: 10
+
+storage:
+  trace:
+    # ── Dev: local PVC ───────────────────────────────────────────────────────
+    backend: local
+    local:
+      path: /var/tempo/traces
+
+    # ── Production: uncomment to use S3 instead ──────────────────────────────
+    # backend: s3
+    # s3:
+    #   bucket:   ${TEMPO_S3_BUCKET}
+    #   endpoint: s3.${AWS_REGION}.amazonaws.com
+    #   region:   ${AWS_REGION}
+    #   # IRSA provides credentials — no access key needed
+    #   sse:
+    #     type: SSE-S3
+
+    wal:
+      path: /var/tempo/wal
+
+# ── Metrics generator: creates RED metrics from trace data ────────────────────
+# This allows Prometheus to show request/error/duration metrics derived
+# from traces, enabling trace → metrics correlation in Grafana.
+metrics_generator:
+  registry:
+    external_labels:
+      source: tempo
+      cluster: chaos-platform
+  storage:
+    path:  /var/tempo/generator/wal
+    wal:
+      path: /var/tempo/generator/wal/
+  processors:
+    - service-graphs
+    - span-metrics
+
+overrides:
+  metrics_generator_processors:
+    - service-graphs
+    - span-metrics
+  max_traces_per_user:    10000
+  max_search_bytes_per_trace: 50000
+
+# ── Search ────────────────────────────────────────────────────────────────────
+search_enabled: true
