@@ -1,0 +1,90 @@
+# falco-config.yaml — Falco daemon configuration for the Chaos Platform.
+#
+# This is the main Falco configuration (equivalent to falco.yaml).
+# Loaded via ConfigMap and mounted at /etc/falco/falco.yaml in the DaemonSet.
+
+# ── Rules files ────────────────────────────────────────────────────────────────
+rules_file:
+  - /etc/falco/falco_rules.yaml         # upstream rules
+  - /etc/falco/falco_rules.local.yaml   # our custom rules (overrides go here)
+  - /etc/falco/rules.d/                 # directory of additional rule files
+
+# ── Plugins ───────────────────────────────────────────────────────────────────
+# k8saudit plugin captures Kubernetes audit log events for API-level visibility.
+# cloudtrail plugin is optional — enable if CloudTrail logs are forwarded.
+plugins: []   # can add k8saudit here for deeper K8s API visibility
+
+# ── Output ────────────────────────────────────────────────────────────────────
+# JSON output for Loki/Promtail parsing — structured logs are easier to
+# query than free-form text.
+json_output: true
+json_include_output_property: true
+json_include_tags_property:   true
+
+# Log level — info for production, debug only when troubleshooting
+log_stderr: true
+log_syslog:  false
+log_level:   info
+
+# ── gRPC output (for Falcosidekick) ───────────────────────────────────────────
+# Falcosidekick connects via gRPC and fans events out to Slack, PagerDuty,
+# Prometheus, etc. The actual Falcosidekick deployment is in the monitoring
+# namespace (installed alongside Prometheus).
+grpc:
+  enabled:    true
+  bind_address: "0.0.0.0:5060"
+  threadiness: 8
+
+grpc_output:
+  enabled: true
+
+# ── HTTP output ───────────────────────────────────────────────────────────────
+# Directly POST events to Falcosidekick HTTP endpoint as a fallback
+# when gRPC is not available.
+http_output:
+  enabled:  true
+  url:      "http://falcosidekick.monitoring.svc.cluster.local:2801"
+  user_agent: "falcosecurity/falco"
+
+# ── Program output ────────────────────────────────────────────────────────────
+# Disabled — we use gRPC + HTTP output instead
+program_output:
+  enabled: false
+
+# ── Stdout output ─────────────────────────────────────────────────────────────
+# Also write to stdout so Promtail/Loki picks it up via container log collection
+stdout_output:
+  enabled: true
+
+# ── Syscall monitoring ────────────────────────────────────────────────────────
+syscall_event_drops:
+  actions:
+    - log       # log drops
+    - alert     # also send as alert (shows up in output)
+  rate:  0.03333   # one log per 30s max to avoid log flooding
+  max_burst: 10
+
+# ── Performance ───────────────────────────────────────────────────────────────
+# On SPOT instances under load, the kernel buffer may drop events.
+# Increasing the buffer size reduces drops at the cost of memory.
+syscall_buf_size_preset: 4   # 4 = larger buffer (default 2)
+
+# Falco uses a kernel module or eBPF to capture syscalls. eBPF is preferred
+# in modern kernels as it doesn't require loading an unsigned kernel module.
+modern_bpf: true    # use CO-RE eBPF (requires kernel >= 5.8)
+
+# ── Metadata enrichment ───────────────────────────────────────────────────────
+# Enrich events with K8s metadata from the API server
+metadata_download:
+  max_mb:       10
+  chunk_wait_us: 1000
+  watch_freq_sec: 1
+
+# ── Metrics ──────────────────────────────────────────────────────────────────
+metrics:
+  enabled:           true
+  interval:          1m
+  output_rule:       true   # emit metrics as Falco rules for Prometheus scraping
+  rules_counters_enabled: true
+  resource_utilization_enabled: true
+  libbpf_stats_enabled: true

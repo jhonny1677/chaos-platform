@@ -1,0 +1,165 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: falco
+  namespace: falco
+  labels:
+    app: falco
+    app.kubernetes.io/part-of: chaos-platform
+spec:
+  selector:
+    matchLabels:
+      app: falco
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1   # update one node at a time to preserve coverage
+  template:
+    metadata:
+      labels:
+        app: falco
+        version: "0.37.1"
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port:   "8765"
+        prometheus.io/path:   "/metrics"
+    spec:
+      serviceAccountName: falco
+      hostPID: true          # Falco needs to see host PIDs to correlate with processes
+      hostNetwork: false
+      tolerations:
+        # Ensure Falco runs on ALL nodes, including tainted nodes
+        - operator: Exists
+          effect:   NoSchedule
+        - operator: Exists
+          effect:   NoExecute
+        - operator: Exists
+          effect:   PreferNoSchedule
+
+      initContainers:
+        # The driver-loader installs the eBPF probe or kernel module before
+        # Falco starts. Without this, Falco cannot capture syscalls.
+        - name: falco-driver-loader
+          image: falcosecurity/falco-driver-loader:0.37.1
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            privileged: true   # required for loading kernel modules/eBPF
+          env:
+            - name: FALCO_DRIVER_LOADER_OPTIONS
+              value: "--modern-bpf"
+          volumeMounts:
+            - name: host-boot
+              mountPath: /host/boot
+              readOnly: true
+            - name: host-modules
+              mountPath: /host/lib/modules
+              readOnly: true
+            - name: host-usr
+              mountPath: /host/usr
+              readOnly: true
+
+      containers:
+        - name: falco
+          image: falcosecurity/falco-no-driver:0.37.1
+          imagePullPolicy: IfNotPresent
+
+          ports:
+            - name: grpc
+              containerPort: 5060
+            - name: metrics
+              containerPort: 8765
+            - name: healthz
+              containerPort: 8765
+
+          resources:
+            requests:
+              cpu:    100m
+              memory: 256Mi
+            limits:
+              cpu:    1000m
+              memory: 1Gi
+
+          securityContext:
+            # Falco needs elevated privileges to read from /dev/falco* (eBPF maps)
+            privileged: true
+
+          env:
+            - name: FALCO_BPF_PROBE
+              value: ""   # empty = auto-detect based on modern_bpf config
+
+          volumeMounts:
+            - name: falco-config
+              mountPath: /etc/falco/falco.yaml
+              subPath:   falco.yaml
+              readOnly:  true
+            - name: falco-rules
+              mountPath: /etc/falco/falco_rules.local.yaml
+              subPath:   falco_rules.local.yaml
+              readOnly:  true
+            - name: dev
+              mountPath: /dev
+            - name: proc
+              mountPath: /host/proc
+              readOnly:  true
+            - name: boot
+              mountPath: /host/boot
+              readOnly:  true
+            - name: lib-modules
+              mountPath: /host/lib/modules
+              readOnly:  true
+            - name: usr
+              mountPath: /host/usr
+              readOnly:  true
+            - name: etc
+              mountPath: /host/etc
+              readOnly:  true
+
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8765
+            initialDelaySeconds: 60
+            periodSeconds: 15
+            failureThreshold: 3
+
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8765
+            initialDelaySeconds: 30
+            periodSeconds: 15
+
+      volumes:
+        - name: falco-config
+          configMap:
+            name: falco-config
+        - name: falco-rules
+          configMap:
+            name: falco-rules
+        - name: dev
+          hostPath:
+            path: /dev
+        - name: proc
+          hostPath:
+            path: /proc
+        - name: boot
+          hostPath:
+            path: /boot
+        - name: lib-modules
+          hostPath:
+            path: /lib/modules
+        - name: usr
+          hostPath:
+            path: /usr
+        - name: etc
+          hostPath:
+            path: /etc
+        - name: host-boot
+          hostPath:
+            path: /boot
+        - name: host-modules
+          hostPath:
+            path: /lib/modules
+        - name: host-usr
+          hostPath:
+            path: /usr

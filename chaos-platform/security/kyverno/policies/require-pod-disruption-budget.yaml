@@ -1,0 +1,54 @@
+apiVersion: kyverno.io/v1
+kind: Policy
+metadata:
+  name: require-pod-disruption-budget
+  namespace: chaos-engine
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+  annotations:
+    policies.kyverno.io/title:    Require PodDisruptionBudget
+    policies.kyverno.io/category: Availability
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/description: >
+      Deployments with replicas > 1 must have a matching PodDisruptionBudget.
+      Without a PDB, node drains during maintenance or cluster upgrades can
+      take ALL replicas down simultaneously, causing complete service outages.
+      This is especially critical for the chaos engine and load tester which
+      must remain available even during planned maintenance.
+spec:
+  validationFailureAction: Audit   # Audit first; switch to Enforce after all PDBs are created
+  background: true                 # Also check existing resources (not just new admissions)
+  rules:
+    - name: check-pdb-exists
+      match:
+        any:
+          - resources:
+              kinds:     [Deployment]
+              namespaces: [chaos-engine, load-tester, chaos-platform, monitoring]
+      preconditions:
+        all:
+          - key:   "{{ request.object.spec.replicas }}"
+            operator: GreaterThan
+            value:  "1"
+      validate:
+        message: >
+          Deployment '{{ request.object.metadata.name }}' has {{ request.object.spec.replicas }}
+          replicas but no PodDisruptionBudget exists. Create a PDB to prevent all replicas
+          from being evicted simultaneously:
+            kubectl create pdb {{ request.object.metadata.name }}-pdb
+              --selector=app={{ request.object.metadata.name }}
+              --min-available=1 -n {{ request.object.metadata.namespace }}
+        deny:
+          conditions:
+            all:
+              - key: >
+                  {{ request.object.metadata.name }}
+                operator: AnyNotIn
+                value: >
+                  {{ request.context[0].poddisruptionbudgets[].spec.selector.matchLabels.app || `[]` }}
+      context:
+        - name: poddisruptionbudgets
+          apiCall:
+            urlPath: >
+              /apis/policy/v1/namespaces/{{ request.object.metadata.namespace }}/poddisruptionbudgets
+            jmesPath: items

@@ -1,0 +1,48 @@
+---
+# External ClusterIP — clients (services, CI, scripts) use this
+apiVersion: v1
+kind: Service
+metadata:
+  name: vault
+  namespace: vault
+  labels:
+    app: vault
+    app.kubernetes.io/part-of: chaos-platform
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/path:   "/v1/sys/metrics"
+    prometheus.io/port:   "8200"
+spec:
+  selector:
+    app: vault
+  ports:
+    - name: http
+      port: 8200
+      targetPort: 8200
+    - name: cluster
+      port: 8201
+      targetPort: 8201
+  type: ClusterIP
+
+---
+# Headless service — used for Raft peer discovery between pods
+# Each pod gets a stable DNS name: vault-0.vault-internal.vault.svc.cluster.local
+apiVersion: v1
+kind: Service
+metadata:
+  name: vault-internal
+  namespace: vault
+  labels:
+    app: vault
+spec:
+  selector:
+    app: vault
+  clusterIP: None   # headless
+  ports:
+    - name: http
+      port: 8200
+      targetPort: 8200
+    - name: cluster
+      port: 8201
+      targetPort: 8201
+  publishNotReadyAddresses: true   # needed for Raft bootstrap

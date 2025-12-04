@@ -1,0 +1,51 @@
+# chaos-platform-cert.yaml — TLS certificate for the chaos platform dashboard.
+#
+# This Certificate resource tells cert-manager to obtain a TLS cert for
+# your dashboard domain and store it as a K8s Secret. The Ingress resource
+# then references this Secret for TLS termination.
+#
+# cert-manager workflow:
+#   1. cert-manager sees this Certificate resource
+#   2. Contacts Let's Encrypt (or CA issuer) via ACME/CA protocol
+#   3. Proves domain ownership via HTTP-01 challenge
+#   4. Receives the cert and stores it in chaos-platform-tls Secret
+#   5. Monitors expiry and auto-renews 30 days before expiration
+#
+# Replace REPLACE_WITH_YOUR_DOMAIN with your actual domain.
+
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: chaos-platform-tls
+  namespace: chaos-platform   # must match the Ingress namespace
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+spec:
+  secretName: chaos-platform-tls   # K8s Secret where cert+key are stored
+  duration:   2160h     # 90 days (Let's Encrypt maximum)
+  renewBefore: 720h     # start renewing 30 days before expiry
+
+  subject:
+    organizations: [chaos-platform]
+
+  # Hostnames this cert is valid for
+  dnsNames:
+    - "REPLACE_WITH_YOUR_DOMAIN"                   # e.g., chaos.example.com
+    - "dashboard.REPLACE_WITH_YOUR_DOMAIN"          # e.g., dashboard.chaos.example.com
+    - "api.REPLACE_WITH_YOUR_DOMAIN"                # e.g., api.chaos.example.com
+
+  privateKey:
+    algorithm:  ECDSA    # ECDSA P-256 is faster than RSA and equally secure
+    size:       256
+    rotationPolicy: Always   # generate a new key on every renewal
+
+  issuerRef:
+    name:  letsencrypt-staging   # CHANGE TO letsencrypt-prod when ready
+    kind:  ClusterIssuer
+    group: cert-manager.io
+
+  # Usages required for TLS server certificates
+  usages:
+    - server auth
+    - digital signature
+    - key encipherment

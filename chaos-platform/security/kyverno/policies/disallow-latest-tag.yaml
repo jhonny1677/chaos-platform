@@ -1,0 +1,63 @@
+apiVersion: kyverno.io/v1
+kind: Policy
+metadata:
+  name: disallow-latest-tag
+  namespace: chaos-engine
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+  annotations:
+    policies.kyverno.io/title:    Disallow Latest Tag
+    policies.kyverno.io/category: Supply Chain Security
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/description: >
+      Images tagged ':latest' are not reproducible — two deployments with the
+      same manifest can run different code if the upstream image changes. This
+      makes rollbacks unreliable and security audits meaningless (you can't
+      prove what code was running at a given time). Pin all images to a specific
+      git SHA or semver tag.
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+    - name: require-image-tag
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+      validate:
+        message: >
+          Image '{{ request.object.spec.containers[*].image }}' must not use the
+          ':latest' tag. Use a specific version tag (e.g., :1.2.3) or a git SHA
+          (e.g., :abc1234).
+        foreach:
+          - list: request.object.spec.containers
+            deny:
+              conditions:
+                any:
+                  - key:      "{{ element.image }}"
+                    operator: Equals
+                    value:    "*:latest"
+                  - key:      "{{ element.image }}"
+                    operator: NotContains
+                    value:    ":"
+
+    - name: require-image-tag-init
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+      preconditions:
+        all:
+          - key:      "{{ request.object.spec.initContainers[] | length(@) }}"
+            operator: GreaterThan
+            value:    "0"
+      validate:
+        message: "Init container images must also be pinned to a specific tag."
+        foreach:
+          - list: request.object.spec.initContainers
+            deny:
+              conditions:
+                any:
+                  - key:      "{{ element.image }}"
+                    operator: Equals
+                    value:    "*:latest"

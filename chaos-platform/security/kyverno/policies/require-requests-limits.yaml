@@ -1,0 +1,65 @@
+apiVersion: kyverno.io/v1
+kind: Policy
+metadata:
+  name: require-requests-limits
+  namespace: chaos-engine
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+  annotations:
+    policies.kyverno.io/title:    Require Resource Requests and Limits
+    policies.kyverno.io/category: Resource Management
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/description: >
+      All containers must declare CPU and memory requests and limits.
+      Without limits, a misbehaving container can starve other containers on
+      the same node. During chaos experiments this is especially dangerous —
+      a runaway process can kill the node hosting the chaos engine itself.
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+    - name: validate-resources
+      match:
+        any:
+          - resources:
+              kinds:     [Pod]
+              namespaces: [chaos-engine, load-tester, chaos-platform, dashboard]
+      validate:
+        message: >
+          Container '{{ request.object.spec.containers[].name }}' must declare
+          resources.requests.cpu, resources.requests.memory, resources.limits.cpu,
+          and resources.limits.memory.
+        pattern:
+          spec:
+            containers:
+              - resources:
+                  requests:
+                    memory: "?*"
+                    cpu:    "?*"
+                  limits:
+                    memory: "?*"
+                    cpu:    "?*"
+
+    - name: validate-init-container-resources
+      match:
+        any:
+          - resources:
+              kinds:     [Pod]
+              namespaces: [chaos-engine, load-tester, chaos-platform, dashboard]
+      preconditions:
+        all:
+          - key:      "{{ request.object.spec.initContainers[] | length(@) }}"
+            operator: GreaterThan
+            value:    "0"
+      validate:
+        message: "Init containers must also declare resource requests and limits."
+        pattern:
+          spec:
+            initContainers:
+              - resources:
+                  requests:
+                    memory: "?*"
+                    cpu:    "?*"
+                  limits:
+                    memory: "?*"
+                    cpu:    "?*"

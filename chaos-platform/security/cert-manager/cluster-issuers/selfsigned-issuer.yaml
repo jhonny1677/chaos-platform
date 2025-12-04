@@ -1,0 +1,62 @@
+# selfsigned-issuer.yaml — Self-signed certificate issuer for development.
+#
+# Self-signed certificates are:
+#   - Valid immediately (no ACME challenge)
+#   - Not trusted by browsers (expected for dev — add to your OS trust store)
+#   - Useful for service mesh mTLS, Vault TLS, and internal service communication
+#   - Required as a bootstrap CA before the public Let's Encrypt cert is available
+#
+# Usage pattern (bootstrap):
+#   1. Create a self-signed CA cert using this issuer
+#   2. Use the CA cert to sign a second ClusterIssuer (CA-based issuer)
+#   3. The CA-based issuer signs all service certificates
+# This avoids using self-signed leaf certs directly — a CA intermediate layer
+# lets you rotate leaf certs without changing every trust anchor.
+
+---
+# Step 1: Self-signed issuer (no configuration required — signs anything it's asked to)
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: selfsigned-issuer
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+spec:
+  selfSigned: {}
+
+---
+# Step 2: Internal CA certificate — signed by the self-signed issuer
+# This CA cert will be used to sign all internal service certs
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: chaos-platform-ca
+  namespace: cert-manager
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+spec:
+  isCA: true
+  commonName: chaos-platform-internal-ca
+  subject:
+    organizations: [chaos-platform]
+  secretName: chaos-platform-ca-secret
+  privateKey:
+    algorithm: ECDSA
+    size:       256
+  issuerRef:
+    name:  selfsigned-issuer
+    kind:  ClusterIssuer
+    group: cert-manager.io
+
+---
+# Step 3: CA-based issuer — uses the CA cert above to sign service certs
+# Reference this issuer in your service Certificate resources, NOT selfsigned-issuer
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: chaos-platform-ca-issuer
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+spec:
+  ca:
+    secretName: chaos-platform-ca-secret   # references Step 2 above

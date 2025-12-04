@@ -1,0 +1,106 @@
+---
+# ConfigMap for falco.yaml — main Falco configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: falco-config
+  namespace: falco
+  labels:
+    app: falco
+    app.kubernetes.io/part-of: chaos-platform
+data:
+  falco.yaml: |
+    rules_file:
+      - /etc/falco/falco_rules.yaml
+      - /etc/falco/falco_rules.local.yaml
+
+    json_output: true
+    json_include_output_property: true
+    json_include_tags_property:   true
+
+    log_stderr: true
+    log_syslog:  false
+    log_level:   info
+
+    grpc:
+      enabled:    true
+      bind_address: "0.0.0.0:5060"
+      threadiness: 8
+
+    grpc_output:
+      enabled: true
+
+    http_output:
+      enabled:  true
+      url:      "http://falcosidekick.monitoring.svc.cluster.local:2801"
+      user_agent: "falcosecurity/falco"
+
+    stdout_output:
+      enabled: true
+
+    syscall_event_drops:
+      actions: [log, alert]
+      rate:  0.03333
+      max_burst: 10
+
+    modern_bpf: true
+
+    metrics:
+      enabled:           true
+      interval:          1m
+      output_rule:       true
+      rules_counters_enabled: true
+      resource_utilization_enabled: true
+
+---
+# ConfigMap for our custom rules
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: falco-rules
+  namespace: falco
+  labels:
+    app: falco
+    app.kubernetes.io/part-of: chaos-platform
+data:
+  falco_rules.local.yaml: |
+    # Custom rules for the Chaos Platform — see security/falco/falco-rules.yaml
+    # for the full annotated version. This is the ConfigMap-embedded version.
+
+    - rule: Shell Spawned in Application Container
+      desc: Shell spawned in application container — indicates possible compromise
+      condition: >
+        spawned_process and container
+        and k8s.ns.name in (chaos-engine, load-tester, dashboard, chaos-platform)
+        and proc.name in (bash, sh, zsh, dash)
+        and not proc.pname in (bash, sh)
+      output: >
+        Shell in app container (shell=%proc.name parent=%proc.pname
+        cmdline=%proc.cmdline user=%user.name container=%container.id
+        image=%container.image.repository k8s_pod=%k8s.pod.name)
+      priority: ERROR
+      tags: [shell, chaos-platform, intrusion-detection]
+
+    - rule: Write to Sensitive Path in Chaos Platform Container
+      desc: Write to /etc, /bin, or /usr in chaos platform container
+      condition: >
+        open_write and container
+        and k8s.ns.name in (chaos-engine, load-tester, dashboard)
+        and (fd.name startswith /etc/ or fd.name startswith /bin/ or fd.name startswith /usr/bin/)
+      output: >
+        Sensitive write in container (file=%fd.name proc=%proc.cmdline
+        user=%user.name container=%container.id k8s_pod=%k8s.pod.name)
+      priority: ERROR
+      tags: [filesystem, persistence, chaos-platform]
+
+    - rule: Vault Connection from Non-Authorized Container
+      desc: Outbound connection to Vault from unexpected container
+      condition: >
+        outbound and container and fd.rport = 8200
+        and not container.name in (chaos-engine, load-tester, vault-agent, vault-init)
+        and k8s.ns.name in (chaos-engine, load-tester, chaos-platform, dashboard)
+      output: >
+        Unauthorized Vault connection (container=%container.name
+        dst=%fd.rip:%fd.rport proc=%proc.cmdline k8s_pod=%k8s.pod.name)
+      priority: CRITICAL
+      tags: [vault, secrets, chaos-platform]

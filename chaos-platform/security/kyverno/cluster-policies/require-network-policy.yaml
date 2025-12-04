@@ -1,0 +1,57 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-network-policy
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+  annotations:
+    policies.kyverno.io/title:    Require NetworkPolicy (Cluster-Wide)
+    policies.kyverno.io/category: Network Security
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/description: >
+      Every application namespace must have at least one NetworkPolicy.
+      Without NetworkPolicies, any pod in the cluster can communicate with
+      any other pod — there is no east-west traffic isolation. This means
+      a compromised chaos engine could directly reach the dashboard database,
+      exfiltrate Vault credentials, or communicate with attacker-controlled
+      infrastructure. The default-deny NetworkPolicy in each namespace
+      (from Phase 2) satisfies this requirement.
+spec:
+  validationFailureAction: Audit   # Audit because kube-system legitimately has no NetworkPolicies
+  background: true
+  rules:
+    - name: check-namespace-has-network-policy
+      match:
+        any:
+          - resources:
+              kinds: [Namespace]
+              selector:
+                matchLabels:
+                  environment: production   # Only enforce on production namespaces
+      exclude:
+        any:
+          - resources:
+              names:
+                - kube-system
+                - kube-public
+                - kube-node-lease
+                - gatekeeper-system
+                - cert-manager
+      validate:
+        message: >
+          Namespace '{{ request.object.metadata.name }}' does not have any NetworkPolicies.
+          Add a default-deny NetworkPolicy before deploying workloads:
+            kubectl apply -f chaos-platform/k8s/network-policies/ -n {{ request.object.metadata.name }}
+        deny:
+          conditions:
+            all:
+              - key: >
+                  {{ request.context[0].networkpolicies | length(@) }}
+                operator: Equals
+                value: "0"
+      context:
+        - name: networkpolicies
+          apiCall:
+            urlPath: >
+              /apis/networking.k8s.io/v1/namespaces/{{ request.object.metadata.name }}/networkpolicies
+            jmesPath: items

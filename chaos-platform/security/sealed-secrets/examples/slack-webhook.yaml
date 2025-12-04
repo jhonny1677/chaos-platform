@@ -1,0 +1,48 @@
+# slack-webhook.yaml — Example SealedSecret for Alertmanager Slack webhook URL.
+#
+# Alertmanager uses this webhook URL to send alerts to the #chaos-platform-alerts
+# Slack channel. The webhook URL is a secret because anyone with it can post
+# messages to your Slack workspace — a social engineering risk.
+#
+# How to create a Slack webhook:
+#   1. Go to api.slack.com/apps
+#   2. Create a new app for your workspace
+#   3. Enable "Incoming Webhooks"
+#   4. Add a webhook to the channel (e.g., #chaos-alerts)
+#   5. Copy the webhook URL (starts with https://hooks.slack.com/services/...)
+#
+# How to seal:
+#   kubectl create secret generic alertmanager-slack-webhook \
+#     --namespace monitoring \
+#     --from-literal=webhook-url=https://hooks.slack.com/services/REPLACE_ME \
+#     --dry-run=client -o yaml | kubeseal --format=yaml > slack-webhook.yaml
+#
+# Alertmanager references this Secret via:
+#   receivers:
+#     - name: slack
+#       slack_configs:
+#         - api_url:
+#             secretKeyRef:
+#               name: alertmanager-slack-webhook
+#               key: webhook-url
+
+apiVersion: bitnami.com/v1alpha1
+kind: SealedSecret
+metadata:
+  name: alertmanager-slack-webhook
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+  annotations:
+    sealedsecrets.bitnami.com/managed: "true"
+spec:
+  encryptedData:
+    webhook-url: PLACEHOLDER_ENCRYPT_WITH_KUBESEAL_REPLACE_ME
+  template:
+    metadata:
+      name:      alertmanager-slack-webhook
+      namespace: monitoring
+      labels:
+        app:                          alertmanager
+        app.kubernetes.io/part-of:    chaos-platform
+    type: Opaque

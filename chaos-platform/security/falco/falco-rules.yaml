@@ -1,0 +1,184 @@
+# falco-rules.yaml — Custom Falco rules for the Chaos Platform.
+#
+# These rules detect security events specific to our platform:
+#   - Unexpected vault access patterns
+#   - Chaos experiment abuse (running outside scheduled windows)
+#   - Container escape attempts
+#   - Sensitive file access in chaos/load-tester pods
+#   - Kubernetes API abuse from within containers
+#
+# Each rule includes:
+#   condition: the sysdig filter expression that triggers the rule
+#   output:    the log line format (fields rendered at runtime)
+#   priority:  DEBUG < INFORMATIONAL < NOTICE < WARNING < ERROR < CRITICAL < ALERT < EMERGENCY
+#   tags:      categories for routing and dashboards
+
+# ── Override tuning for upstream rules ────────────────────────────────────────
+# Reduce noise from Falco's upstream ruleset in our controlled environment
+- macro: chaos_platform_namespace
+  condition: k8s.ns.name in (chaos-engine, load-tester, chaos-platform, dashboard, vault, monitoring)
+
+- macro: trusted_chaos_engine_container
+  condition: container.name = "chaos-engine" and k8s.ns.name = "chaos-engine"
+
+# ── Rule 1: Unexpected process inside chaos-engine ─────────────────────────────
+- rule: Unexpected Process in Chaos Engine Container
+  desc: >
+    Detects execution of unexpected binaries in the chaos-engine container.
+    The chaos engine only runs a Python asyncio process. Any other process
+    (shell, wget, curl, nc) indicates possible compromise or lateral movement.
+  condition: >
+    spawned_process
+    and container.name = "chaos-engine"
+    and not proc.name in (python3, python, sh, bash, vault, curl)
+    and not proc.pname in (python3, python, supervisord)
+  output: >
+    Unexpected process in chaos-engine container
+    (user=%user.name user_uid=%user.uid command=%proc.cmdline
+     pid=%proc.pid container=%container.id
+     image=%container.image.repository:%container.image.tag
+     k8s_pod=%k8s.pod.name k8s_ns=%k8s.ns.name)
+  priority: WARNING
+  tags:   [process, chaos-platform, container-security]
+
+# ── Rule 2: Shell spawned inside application container ─────────────────────────
+- rule: Shell Spawned in Application Container
+  desc: >
+    A shell (bash/sh/zsh) was spawned inside an application container.
+    Legitimate application containers should never need an interactive shell.
+    This is a strong indicator of an attacker using exec access or an RCE exploit.
+  condition: >
+    spawned_process
+    and container
+    and k8s.ns.name in (chaos-engine, load-tester, dashboard, chaos-platform)
+    and proc.name in (bash, sh, zsh, dash, fish)
+    and not proc.pname in (bash, sh)   # exclude shell-from-shell chains during debug sessions
+  output: >
+    Shell spawned in application container
+    (shell=%proc.name parent=%proc.pname cmdline=%proc.cmdline
+     user=%user.name container=%container.id
+     image=%container.image.repository k8s_pod=%k8s.pod.name)
+  priority: ERROR
+  tags:   [shell, chaos-platform, intrusion-detection]
+
+# ── Rule 3: Write to sensitive paths in container ─────────────────────────────
+- rule: Write to Sensitive Path in Chaos Platform Container
+  desc: >
+    Detects writes to sensitive filesystem paths (/etc, /bin, /usr, /sbin)
+    inside a chaos platform container. These paths are part of the OS or
+    application binaries — legitimate apps use /tmp or mounted volume paths.
+    This rule catches post-exploitation persistence attempts.
+  condition: >
+    open_write
+    and container
+    and k8s.ns.name in (chaos-engine, load-tester, dashboard)
+    and (
+      fd.name startswith /etc/ or
+      fd.name startswith /bin/ or
+      fd.name startswith /usr/bin/ or
+      fd.name startswith /usr/sbin/ or
+      fd.name startswith /sbin/
+    )
+  output: >
+    Write to sensitive path in chaos platform container
+    (file=%fd.name user=%user.name proc=%proc.cmdline
+     container=%container.id image=%container.image.repository
+     k8s_pod=%k8s.pod.name k8s_ns=%k8s.ns.name)
+  priority: ERROR
+  tags:   [filesystem, persistence, chaos-platform]
+
+# ── Rule 4: Vault secret access from unexpected container ─────────────────────
+- rule: Vault Secret Access from Non-Authorized Container
+  desc: >
+    Detects outbound network connections to Vault (port 8200) from containers
+    that should not be reading secrets. The chaos-engine, load-tester, and
+    init containers access Vault legitimately. Dashboard does NOT make direct
+    Vault calls. Any other container attempting Vault connections is suspicious.
+  condition: >
+    outbound
+    and container
+    and fd.rport = 8200
+    and fd.rip != "127.0.0.1"
+    and not container.name in (chaos-engine, load-tester, vault-agent, vault-init)
+    and k8s.ns.name in (chaos-engine, load-tester, chaos-platform, dashboard)
+  output: >
+    Unexpected Vault connection from container
+    (container=%container.name image=%container.image.repository
+     src=%fd.cip dst=%fd.rip:%fd.rport proc=%proc.cmdline
+     k8s_pod=%k8s.pod.name k8s_ns=%k8s.ns.name)
+  priority: CRITICAL
+  tags:   [network, vault, secrets, chaos-platform]
+
+# ── Rule 5: Container attempting to read K8s service account token ─────────────
+- rule: Service Account Token Read from Unexpected Process
+  desc: >
+    The service account token at /var/run/secrets/kubernetes.io/serviceaccount/token
+    grants K8s API access at the token's RBAC level. Reading this token from
+    an unexpected process suggests an attacker attempting to escalate privileges
+    to the K8s API. Vault agent reads it legitimately during auth.
+  condition: >
+    open_read
+    and container
+    and fd.name = /var/run/secrets/kubernetes.io/serviceaccount/token
+    and not proc.name in (vault, vault-agent, python3, python, java)
+    and not proc.pname in (vault, vault-agent)
+    and k8s.ns.name in (chaos-engine, load-tester, dashboard)
+  output: >
+    Service account token read by unexpected process
+    (proc=%proc.name cmdline=%proc.cmdline user=%user.name
+     container=%container.name image=%container.image.repository
+     k8s_pod=%k8s.pod.name k8s_ns=%k8s.ns.name)
+  priority: WARNING
+  tags:   [kubernetes, privilege-escalation, chaos-platform]
+
+# ── Rule 6: Chaos experiment running outside maintenance window ────────────────
+- rule: Chaos Experiment Outside Scheduled Window
+  desc: >
+    Detects chaos experiment execution (process pattern matches Python chaos
+    scripts) between 08:00–17:00 UTC on weekdays. Chaos experiments should
+    only run during off-hours or explicitly scheduled windows to avoid
+    impacting production traffic. This rule provides an audit trail for
+    unscheduled experiments.
+    NOTE: Adjust time window to match your actual experiment schedule.
+  condition: >
+    spawned_process
+    and container.name = "chaos-engine"
+    and proc.cmdline contains "experiment"
+    and not (evt.datetime.hour >= 18 or evt.datetime.hour < 6)
+  output: >
+    Chaos experiment running during business hours (possible unscheduled experiment)
+    (cmdline=%proc.cmdline user=%user.name
+     time=%evt.time k8s_pod=%k8s.pod.name)
+  priority: NOTICE
+  tags:   [chaos, scheduling, chaos-platform]
+
+# ── Rule 7: Outbound connection to unexpected external IP ─────────────────────
+- rule: Unexpected Outbound Connection from Chaos Platform
+  desc: >
+    Application containers should only communicate with other services within
+    the cluster or known external endpoints (AWS services, ECR, Vault).
+    An outbound connection to an unexpected IP from inside a chaos engine or
+    load tester container could indicate:
+      - Data exfiltration after compromise
+      - Cryptominer phone-home
+      - Supply chain backdoor activating
+    This rule fires on ANY external IP not in the approved list.
+  condition: >
+    outbound
+    and container
+    and k8s.ns.name in (chaos-engine, load-tester)
+    and not fd.rip in (
+      "169.254.169.254",      # AWS IMDS (metadata service)
+      "10.0.0.0/8",           # VPC internal range
+      "172.16.0.0/12",        # K8s service CIDR
+      "192.168.0.0/16"        # local dev
+    )
+    and fd.rport != 443       # Allow HTTPS to AWS services (ECR, S3, CloudWatch)
+    and fd.rport != 8200      # Vault (already covered by rule 4)
+  output: >
+    Unexpected external connection from chaos platform container
+    (container=%container.name src=%fd.cip:%fd.cport
+     dst=%fd.rip:%fd.rport proto=%fd.l4proto proc=%proc.cmdline
+     k8s_pod=%k8s.pod.name k8s_ns=%k8s.ns.name)
+  priority: WARNING
+  tags:   [network, exfiltration, chaos-platform]

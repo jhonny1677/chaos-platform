@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: dependency-track
+  namespace: security
+  labels:
+    app: dependency-track
+    app.kubernetes.io/part-of: chaos-platform
+spec:
+  selector:
+    app: dependency-track
+  ports:
+    - name: http
+      port:       8080
+      targetPort: 8080
+  type: ClusterIP

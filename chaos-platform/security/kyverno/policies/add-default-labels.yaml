@@ -1,0 +1,44 @@
+apiVersion: kyverno.io/v1
+kind: Policy
+metadata:
+  name: add-default-labels
+  namespace: chaos-engine
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+  annotations:
+    policies.kyverno.io/title:    Add Default Labels (Mutate)
+    policies.kyverno.io/category: Operational Readiness
+    policies.kyverno.io/severity: low
+    policies.kyverno.io/description: >
+      Automatically adds required platform labels to Pods that are missing them.
+      This is a MUTATE policy (not validate) — it adds labels rather than
+      rejecting resources. This provides a safety net so that service discovery,
+      NetworkPolicies, and monitoring still work even if a developer forgets to
+      add labels. Validation policies then ensure the added labels are meaningful.
+spec:
+  rules:
+    - name: add-part-of-label
+      match:
+        any:
+          - resources:
+              kinds:     [Pod]
+              namespaces: [chaos-engine, load-tester, chaos-platform, dashboard, monitoring]
+      mutate:
+        patchStrategicMerge:
+          metadata:
+            labels:
+              +(app.kubernetes.io/part-of): "chaos-platform"
+              +(app.kubernetes.io/managed-by): "kyverno"
+
+    - name: add-timestamp-annotation
+      match:
+        any:
+          - resources:
+              kinds:     [Pod]
+              namespaces: [chaos-engine, load-tester, chaos-platform, dashboard]
+      mutate:
+        patchStrategicMerge:
+          metadata:
+            annotations:
+              +(chaos-platform/admission-time): "{{ time_now_utc() }}"
+              +(chaos-platform/policy-version: "v1"

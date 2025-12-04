@@ -1,0 +1,77 @@
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: vault
+  namespace: vault
+  labels:
+    app: vault
+    app.kubernetes.io/part-of: chaos-platform
+
+---
+# Vault needs to read K8s service account tokens to validate auth requests
+# from our services (Kubernetes auth method).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: vault-auth-delegator
+  labels:
+    app: vault
+rules:
+  - apiGroups: [""]
+    resources: [serviceaccounts, serviceaccounts/token]
+    verbs:     [get, list, watch, create]
+  - apiGroups: [authentication.k8s.io]
+    resources: [tokenreviews]
+    verbs:     [create]
+  - apiGroups: [authorization.k8s.io]
+    resources: [subjectaccessreviews]
+    verbs:     [create]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: vault-auth-delegator
+  labels:
+    app: vault
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind:     ClusterRole
+  name:     vault-auth-delegator
+subjects:
+  - kind:      ServiceAccount
+    name:      vault
+    namespace: vault
+
+---
+# Vault agent injector needs to read secrets and watch pods to inject sidecars
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: vault-agent-injector
+  labels:
+    app: vault
+rules:
+  - apiGroups: [""]
+    resources: [pods, secrets, configmaps]
+    verbs:     [get, list, watch]
+  - apiGroups: [admissionregistration.k8s.io]
+    resources: [mutatingwebhookconfigurations]
+    verbs:     [get, list, patch, watch]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: vault-agent-injector
+  labels:
+    app: vault
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind:     ClusterRole
+  name:     vault-agent-injector
+subjects:
+  - kind:      ServiceAccount
+    name:      vault
+    namespace: vault

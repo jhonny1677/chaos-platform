@@ -1,0 +1,29 @@
+---
+# Namespace for OPA Gatekeeper
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: gatekeeper-system
+  labels:
+    control-plane: controller-manager
+    app.kubernetes.io/part-of: chaos-platform
+
+---
+# OPA Gatekeeper is typically installed via Helm but we include a minimal
+# resource manifest here for the chaos-platform specific configuration.
+# Run: helm install gatekeeper gatekeeper/gatekeeper -n gatekeeper-system
+# Then apply the constraints in gatekeeper-constraints.yaml.
+#
+# Audit config — check all existing resources every 60s for policy violations
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gatekeeper-audit-config
+  namespace: gatekeeper-system
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+data:
+  audit-interval: "60"    # seconds between audit cycles
+  audit-chunk-size: "500" # resources per audit chunk
+  log-denies: "true"      # log all denials to stdout for Loki pickup
+  emit-admission-events: "true"

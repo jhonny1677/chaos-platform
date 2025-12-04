@@ -1,0 +1,57 @@
+apiVersion: kyverno.io/v1
+kind: Policy
+metadata:
+  name: restrict-image-registries
+  namespace: chaos-engine
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+  annotations:
+    policies.kyverno.io/title:    Restrict Image Registries
+    policies.kyverno.io/category: Supply Chain Security
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/description: >
+      Only allow images from approved registries. Our ECR registry is the only
+      source for application images — every push triggers a Trivy scan and
+      Gitleaks check before the image is tagged. Public images from docker.io/library
+      are allowed for base images used in init containers.
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+    - name: validate-image-registry
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+      validate:
+        message: >
+          Image '{{ images.containers.*.name }}' is from an unapproved registry.
+          All application images must come from:
+            REPLACE_WITH_AWS_ACCOUNT_ID.dkr.ecr.REPLACE_WITH_REGION.amazonaws.com/chaos-platform/
+          Official base images (busybox, nginx) from docker.io/library are also permitted.
+        pattern:
+          spec:
+            containers:
+              - image: >-
+                  REPLACE_WITH_AWS_ACCOUNT_ID.dkr.ecr.REPLACE_WITH_REGION.amazonaws.com/chaos-platform/* |
+                  docker.io/library/* |
+                  busybox:* |
+                  grafana/* |
+                  prom/* |
+                  otel/* |
+                  hashicorp/vault:* |
+                  falcosecurity/*
+
+    - name: disallow-latest-tag
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+      validate:
+        message: >
+          Image '{{ request.object.spec.containers[0].image }}' uses the :latest tag.
+          Pin your images to a specific git SHA or semver tag to ensure reproducible deployments.
+        pattern:
+          spec:
+            containers:
+              - image: "!*:latest"

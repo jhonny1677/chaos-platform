@@ -1,0 +1,222 @@
+---
+# ── ConstraintTemplate: RequireResourceLimits ─────────────────────────────────
+apiVersion: templates.gatekeeper.sh/v1beta1
+kind: ConstraintTemplate
+metadata:
+  name: requireresourcelimits
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+spec:
+  crd:
+    spec:
+      names:
+        kind: RequireResourceLimits
+      validation:
+        openAPIV3Schema:
+          properties:
+            exemptNamespaces:
+              type: array
+              items:
+                type: string
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package requireresourcelimits
+
+        import future.keywords.in
+
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.containers[_]
+          not input.review.object.metadata.namespace in input.parameters.exemptNamespaces
+          not container.resources.limits.cpu
+          msg := sprintf("Container '%v' is missing a CPU limit.", [container.name])
+        }
+
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.containers[_]
+          not input.review.object.metadata.namespace in input.parameters.exemptNamespaces
+          not container.resources.limits.memory
+          msg := sprintf("Container '%v' is missing a memory limit.", [container.name])
+        }
+
+---
+# Constraint instance — applies RequireResourceLimits to all namespaces
+# except the exempt list
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: RequireResourceLimits
+metadata:
+  name: require-resource-limits
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+spec:
+  enforcementAction: deny   # deny on admission; use warn for gradual rollout
+  match:
+    kinds:
+      - apiGroups: [""]
+        kinds:    [Pod]
+  parameters:
+    exemptNamespaces:
+      - kube-system
+      - kube-public
+      - kube-node-lease
+      - gatekeeper-system
+
+---
+# ── ConstraintTemplate: RequireNonRoot ────────────────────────────────────────
+apiVersion: templates.gatekeeper.sh/v1beta1
+kind: ConstraintTemplate
+metadata:
+  name: requirenonroot
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+spec:
+  crd:
+    spec:
+      names:
+        kind: RequireNonRoot
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package requirenonroot
+
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.containers[_]
+          not container.securityContext.runAsNonRoot
+          msg := sprintf("Container '%v' must set runAsNonRoot: true.", [container.name])
+        }
+
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.containers[_]
+          container.securityContext.runAsUser == 0
+          msg := sprintf("Container '%v' explicitly runs as UID 0 (root).", [container.name])
+        }
+
+---
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: RequireNonRoot
+metadata:
+  name: require-non-root
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+spec:
+  enforcementAction: deny
+  match:
+    kinds:
+      - apiGroups: [""]
+        kinds:    [Pod]
+
+---
+# ── ConstraintTemplate: DenyPrivileged ────────────────────────────────────────
+apiVersion: templates.gatekeeper.sh/v1beta1
+kind: ConstraintTemplate
+metadata:
+  name: denyprivileged
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+spec:
+  crd:
+    spec:
+      names:
+        kind: DenyPrivileged
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package denyprivileged
+
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.containers[_]
+          container.securityContext.privileged == true
+          msg := sprintf("Container '%v' is privileged.", [container.name])
+        }
+
+        violation[{"msg": msg}] {
+          input.review.object.spec.hostPID == true
+          msg := "Pod uses hostPID: true."
+        }
+
+        violation[{"msg": msg}] {
+          input.review.object.spec.hostNetwork == true
+          msg := "Pod uses hostNetwork: true."
+        }
+
+---
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: DenyPrivileged
+metadata:
+  name: deny-privileged
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+spec:
+  enforcementAction: deny
+  match:
+    kinds:
+      - apiGroups: [""]
+        kinds:    [Pod]
+
+---
+# ── ConstraintTemplate: AllowOnlyApprovedRegistries ──────────────────────────
+apiVersion: templates.gatekeeper.sh/v1beta1
+kind: ConstraintTemplate
+metadata:
+  name: allowonlyapprovedregistries
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+spec:
+  crd:
+    spec:
+      names:
+        kind: AllowOnlyApprovedRegistries
+      validation:
+        openAPIV3Schema:
+          properties:
+            allowedRegistries:
+              type: array
+              items:
+                type: string
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package allowonlyapprovedregistries
+
+        import future.keywords.in
+
+        approved(image) {
+          some prefix in input.parameters.allowedRegistries
+          startswith(image, prefix)
+        }
+
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.containers[_]
+          not approved(container.image)
+          msg := sprintf("Container '%v' uses image '%v' from an unapproved registry.", [container.name, container.image])
+        }
+
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.containers[_]
+          endswith(container.image, ":latest")
+          msg := sprintf("Container '%v' uses :latest tag. Pin to a specific tag.", [container.name])
+        }
+
+---
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: AllowOnlyApprovedRegistries
+metadata:
+  name: allow-only-approved-registries
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+spec:
+  enforcementAction: deny
+  match:
+    kinds:
+      - apiGroups: [""]
+        kinds:    [Pod]
+  parameters:
+    allowedRegistries:
+      - "REPLACE_WITH_AWS_ACCOUNT_ID.dkr.ecr.REPLACE_WITH_REGION.amazonaws.com/chaos-platform/"
+      - "docker.io/library/"
+      - "busybox"
+      - "grafana/"
+      - "prom/"
+      - "otel/"
+      - "hashicorp/vault"
+      - "falcosecurity/"

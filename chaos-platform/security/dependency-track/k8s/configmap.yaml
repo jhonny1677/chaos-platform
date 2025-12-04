@@ -1,0 +1,50 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: security
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+    environment: production
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: dependency-track
+  namespace: security
+  labels:
+    app: dependency-track
+    app.kubernetes.io/part-of: chaos-platform
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dependency-track-config
+  namespace: security
+  labels:
+    app: dependency-track
+    app.kubernetes.io/part-of: chaos-platform
+data:
+  # ── Analysis defaults ────────────────────────────────────────────────────────
+  # These settings configure the automatic vulnerability analysis behavior.
+  # They can also be set via the DT web UI after first login.
+
+  # How often to update the NVD vulnerability feed (hours)
+  # NVD updates roughly daily; checking every 6h ensures we catch new CVEs
+  nvd_api_delay: "6"
+
+  # Automatic vulnerability analysis on SBOM upload
+  auto_analyze: "true"
+
+  # Scan for vulnerabilities in transitive dependencies (not just direct)
+  scan_transitive: "true"
+
+  # SBOM format support (CycloneDX is the most complete format)
+  supported_formats: "cyclonedx-json,cyclonedx-xml,spdx-json"
+
+  # ── Notification defaults ────────────────────────────────────────────────────
+  # Configure alerts in the DT web UI → Administration → Notifications
+  # Webhook destination for vulnerability findings:
+  webhook_url_placeholder: "REPLACE_WITH_SLACK_OR_WEBHOOK_URL"

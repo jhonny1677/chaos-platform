@@ -1,0 +1,62 @@
+apiVersion: kyverno.io/v1
+kind: Policy
+metadata:
+  name: require-readonly-rootfs
+  namespace: chaos-engine
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+  annotations:
+    policies.kyverno.io/title:    Require Read-Only Root Filesystem
+    policies.kyverno.io/category: Container Hardening
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/description: >
+      All containers must use readOnlyRootFilesystem: true. A writable root
+      filesystem allows attackers to modify system binaries, install persistence
+      mechanisms, or tamper with application code after a container escape.
+      Applications that need to write data should use emptyDir or PVC volume mounts
+      for specific writable paths, not a writable root filesystem.
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+    - name: validate-readonly-rootfs
+      match:
+        any:
+          - resources:
+              kinds:     [Pod]
+              namespaces: [chaos-engine, load-tester, chaos-platform, dashboard]
+      validate:
+        message: >
+          Container '{{ request.object.spec.containers[].name }}' must set
+          securityContext.readOnlyRootFilesystem: true. Mount specific writable
+          paths as emptyDir volumes instead of using a writable root filesystem.
+          Example:
+            securityContext:
+              readOnlyRootFilesystem: true
+            volumeMounts:
+              - name: tmp
+                mountPath: /tmp
+          volumes:
+            - name: tmp
+              emptyDir: {}
+        pattern:
+          spec:
+            containers:
+              - securityContext:
+                  readOnlyRootFilesystem: true
+
+    - name: validate-no-privilege-escalation
+      match:
+        any:
+          - resources:
+              kinds:     [Pod]
+              namespaces: [chaos-engine, load-tester, chaos-platform, dashboard]
+      validate:
+        message: >
+          Container '{{ request.object.spec.containers[].name }}' must set
+          securityContext.allowPrivilegeEscalation: false.
+        pattern:
+          spec:
+            containers:
+              - securityContext:
+                  allowPrivilegeEscalation: false

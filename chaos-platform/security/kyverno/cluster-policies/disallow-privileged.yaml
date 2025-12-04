@@ -1,0 +1,94 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: disallow-privileged-containers
+  labels:
+    app.kubernetes.io/part-of: chaos-platform
+  annotations:
+    policies.kyverno.io/title:    Disallow Privileged Containers (Cluster-Wide)
+    policies.kyverno.io/category: Pod Security
+    policies.kyverno.io/severity: critical
+    policies.kyverno.io/description: >
+      Cluster-wide policy that denies privileged containers, hostPID, hostNetwork,
+      and hostPath volumes in ALL namespaces except the explicitly whitelisted ones.
+      This is the nuclear option — a privileged container provides full host access
+      and defeats all namespace isolation. No application workload requires it.
+      Only Falco (runtime security scanner) and node-monitoring components are exempt
+      because they legitimately need host-level access to do their job.
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+    - name: disallow-privileged
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+      exclude:
+        any:
+          - resources:
+              namespaces:
+                - kube-system
+                - falco           # Falco needs privileged to read kernel syscalls
+                - gatekeeper-system
+      validate:
+        message: >
+          Privileged containers are not allowed in namespace '{{ request.object.metadata.namespace }}'.
+          Container '{{ request.object.spec.containers[].name }}' has privileged: true.
+          This completely bypasses container isolation. Only system namespaces are exempt.
+        pattern:
+          spec:
+            containers:
+              - =(securityContext):
+                  =(privileged): false
+
+    - name: disallow-host-pid
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+      exclude:
+        any:
+          - resources:
+              namespaces: [kube-system, falco]
+      validate:
+        message: "hostPID: true is not permitted. Containers can see all host processes."
+        pattern:
+          spec:
+            =(hostPID): false
+
+    - name: disallow-host-network
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+      exclude:
+        any:
+          - resources:
+              namespaces: [kube-system, ingress-nginx]
+      validate:
+        message: "hostNetwork: true is not permitted except in kube-system and ingress-nginx."
+        pattern:
+          spec:
+            =(hostNetwork): false
+
+    - name: disallow-host-path
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+      exclude:
+        any:
+          - resources:
+              namespaces: [kube-system, falco]
+      validate:
+        message: >
+          Pod '{{ request.object.metadata.name }}' uses a hostPath volume.
+          HostPath volumes mount host filesystem directories into containers,
+          enabling escape attacks. Use PVCs or emptyDir instead.
+        deny:
+          conditions:
+            any:
+              - key:      "hostPath"
+                operator: AnyIn
+                value:    "{{ request.object.spec.volumes[].keys(@)[] }}"

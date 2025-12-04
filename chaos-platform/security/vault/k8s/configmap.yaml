@@ -1,0 +1,41 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vault-config
+  namespace: vault
+  labels:
+    app: vault
+    app.kubernetes.io/part-of: chaos-platform
+data:
+  vault-config.hcl: |
+    storage "raft" {
+      path    = "/vault/data"
+      node_id = "vault-0"
+
+      retry_join {
+        leader_api_addr = "http://vault-0.vault-internal.vault.svc.cluster.local:8200"
+      }
+    }
+
+    listener "tcp" {
+      address         = "0.0.0.0:8200"
+      cluster_address = "0.0.0.0:8201"
+      tls_disable     = "true"
+
+      telemetry {
+        unauthenticated_metrics_access = true
+      }
+    }
+
+    ui = true
+
+    telemetry {
+      prometheus_retention_time = "30s"
+      disable_hostname          = true
+    }
+
+    max_lease_ttl     = "768h"
+    default_lease_ttl = "768h"
+
+    log_format = "json"
+    log_level  = "info"
