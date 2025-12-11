@@ -1,0 +1,4 @@
+# No external dependencies required.
+# boto3 is provided by the Lambda runtime.
+# SlackClient uses stdlib urllib to avoid any dependency on requests/httpx.
+boto3>=1.34.0
