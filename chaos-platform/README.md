@@ -1,176 +1,109 @@
-# Chaos Engineering & Load Testing Platform
+# Chaos Engineering and Load Testing Platform
 
-![Infrastructure](https://img.shields.io/badge/Infrastructure-Terraform-7B42BC?style=flat-square&logo=terraform)
-![Kubernetes](https://img.shields.io/badge/Kubernetes-EKS_1.29-326CE5?style=flat-square&logo=kubernetes)
-![Python](https://img.shields.io/badge/Backend-Python_3.11-3776AB?style=flat-square&logo=python)
-![React](https://img.shields.io/badge/Frontend-React_18-61DAFB?style=flat-square&logo=react)
-![ArgoCD](https://img.shields.io/badge/CD-ArgoCD_GitOps-EF7B4D?style=flat-square)
-![Vault](https://img.shields.io/badge/Secrets-HashiCorp_Vault-FFEC6E?style=flat-square&logo=vault&logoColor=black)
-![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)
-![Phases](https://img.shields.io/badge/Phases-10_Complete-success?style=flat-square)
+![Last Commit](https://img.shields.io/github/last-commit/jhonny1677/chaos-platform)
+![Repo Size](https://img.shields.io/github/repo-size/jhonny1677/chaos-platform)
+![License](https://img.shields.io/badge/license-MIT-blue)
 
-A production-grade chaos engineering and load testing platform built on AWS EKS. Deliberately breaks your systems before your customers do, measures how they fail, and tells you exactly what to fix.
-
----
-
-## What This Is
-
-This platform has two main tools that work together:
-
-**Chaos Engine** — kills pods, adds network delay, exhausts CPU and memory inside your Kubernetes cluster. Runs on a hypothesis: you define acceptable degradation thresholds, the platform measures them, and tells you PASS or FAIL with a PDF report automatically posted to Slack.
-
-**Load Tester** — generates realistic HTTP traffic (ramp, spike, soak, breaking-point scenarios) while KEDA auto-scales workers from 1 to 20 pods. Finds the exact RPS at which your service starts failing so you can set your HPA thresholds correctly.
-
-Run both together: steady load + chaos injection = the most realistic picture of how your system behaves when something breaks in production.
+A production-grade chaos engineering and load testing platform built on AWS EKS. The platform deliberately injects faults into running Kubernetes workloads — killing pods, introducing network latency, exhausting CPU and memory — and measures whether the system maintains its defined reliability thresholds. A companion load testing engine generates configurable traffic profiles to determine service capacity limits and validate autoscaling behaviour under sustained and peak load. Every experiment concludes with an automated PDF report delivered to Slack, containing before-and-after metrics, hypothesis evaluation, and remediation recommendations.
 
 ---
 
 ## Architecture
 
 ```
-                           ┌─── GitHub ───┐
-                           │  CI/CD push  │
-                           └──────┬───────┘
-                                  │ ArgoCD GitOps
-                    ┌─────────────▼──────────────────────────┐
-                    │         AWS EKS (SPOT t3.medium)        │
-                    │                                         │
-                    │  ┌─────────────┐  ┌─────────────────┐  │
-                    │  │ Chaos Engine│  │   Load Tester   │  │
-                    │  │ pod-kill    │  │  ramp/spike/soak│  │
-                    │  │ net-delay   │◄►│  KEDA 1-20 pods │  │
-                    │  │ cpu/memory  │  │  httpx + HTTP/2 │  │
-                    │  └──────┬──────┘  └────────┬────────┘  │
-                    │         │                   │           │
-                    │         ▼                   ▼           │
-                    │  ┌─────────────────────────────────┐   │
-                    │  │   Target App (FastAPI)           │   │
-                    │  │   The system under test          │   │
-                    │  └──────────────┬──────────────────┘   │
-                    │                 │                       │
-                    │  ┌──────────────▼──────────────────┐   │
-                    │  │  Kafka (MSK) │ Redis (ElastiCache│   │
-                    │  │  events log  │ live stats cache  │   │
-                    │  └─────────────────────────────────-┘   │
-                    │                                         │
-                    │  ┌─────────────────────────────────┐   │
-                    │  │  Prometheus · Grafana · Loki     │   │
-                    │  │  Tempo · Alertmanager · OTel     │   │
-                    │  └─────────────────────────────────-┘   │
-                    │                                         │
-                    │  ┌─────────────────────────────────┐   │
-                    │  │  Vault · OPA · Kyverno · Falco   │   │
-                    │  │  cert-manager · Sealed Secrets   │   │
-                    │  └─────────────────────────────────-┘   │
-                    └─────────────┬───────────────────────────┘
-                                  │
-              ┌───────────────────┼──────────────────────┐
-              │                   │                      │
-    ┌─────────▼──────┐  ┌─────────▼──────┐  ┌──────────▼──────┐
-    │  DynamoDB      │  │   S3 Buckets   │  │  Lambda + SNS   │
-    │  experiments   │  │  state/reports │  │  report-gen     │
-    │  state lock    │  │  results/logs  │  │  slack-notifier │
-    └────────────────┘  └────────────────┘  │  exp-scheduler  │
-                                            └─────────────────┘
-                                                     │
-                                            ┌────────▼────────┐
-                                            │  Slack          │
-                                            │  #chaos-reports │
-                                            │  PDF + alerts   │
-                                            └─────────────────┘
+                           +--- GitHub ---+
+                           |  CI/CD push  |
+                           +------+-------+
+                                  | ArgoCD GitOps
+                    +-------------v--------------------------------------+
+                    |         AWS EKS Cluster (t3.medium nodes)          |
+                    |                                                     |
+                    |  +-------------+  +-----------------+              |
+                    |  | Chaos Engine|  |   Load Tester   |              |
+                    |  | pod-kill    |  |  ramp/spike/soak|              |
+                    |  | net-delay   +--+  KEDA 1-20 pods |              |
+                    |  | cpu/memory  |  |  httpx + HTTP/2 |              |
+                    |  +------+------+  +--------+--------+              |
+                    |         |                  |                       |
+                    |         v                  v                       |
+                    |  +------------------------------------------+      |
+                    |  |          Target App (FastAPI)             |      |
+                    |  |          The system under test            |      |
+                    |  +-----------------------+------------------+      |
+                    |                          |                         |
+                    |  +-----------------------v------------------+      |
+                    |  |  Kafka (MSK)  |  Redis (ElastiCache)    |      |
+                    |  |  event stream |  live stats cache        |      |
+                    |  +------------------------------------------+      |
+                    |                                                     |
+                    |  +------------------------------------------+      |
+                    |  |  Prometheus  Grafana  Loki  Tempo        |      |
+                    |  |  Alertmanager  OpenTelemetry Collector   |      |
+                    |  +------------------------------------------+      |
+                    |                                                     |
+                    |  +------------------------------------------+      |
+                    |  |  Vault  OPA/Gatekeeper  Kyverno  Falco   |      |
+                    |  |  cert-manager  Sealed Secrets             |      |
+                    |  +------------------------------------------+      |
+                    +-------------+--------------------------------------+
+                                  |
+              +-------------------+---------------------+
+              |                   |                     |
+    +---------+------+  +---------+------+  +-----------+------+
+    |  DynamoDB      |  |   S3 Buckets   |  |  Lambda + SNS    |
+    |  experiments   |  |  state/reports |  |  report-gen      |
+    |  state lock    |  |  results/logs  |  |  slack-notifier  |
+    +----------------+  +----------------+  |  exp-scheduler   |
+                                            +------------------+
+                                                     |
+                                            +--------v--------+
+                                            |  Slack          |
+                                            |  notifications  |
+                                            |  PDF reports    |
+                                            +-----------------+
 ```
-
----
-
-## Features
-
-### Chaos Engineering
-| Feature | Details |
-|---|---|
-| Pod Kill | Kills N% of pods matching a label selector, respects 50% blast radius cap |
-| Network Delay | Injects configurable latency and jitter using tc/netem |
-| CPU Stress | Consumes target CPU percentage for the experiment duration |
-| Memory Stress | Allocates and holds memory to trigger OOM conditions |
-| Hypothesis Testing | Define SLO thresholds before experiments; auto-evaluated on completion |
-| Circuit Breaker | Stops all chaos if 3 consecutive experiments fail to recover |
-| Blast Radius Cap | Hard limit of 50% — platform refuses experiments above this |
-
-### Load Testing
-| Feature | Details |
-|---|---|
-| Ramp Scenario | Linearly increase RPS from start to end over duration |
-| Spike Scenario | Instant jump to peak RPS, tests autoscaling response time |
-| Soak Scenario | Constant RPS for hours, finds gradual memory leaks |
-| Breaking Point | Increase by step until failure threshold exceeded |
-| KEDA Autoscaling | Workers scale 1→20 pods based on Redis queue depth |
-| HTTP/2 Support | httpx with HTTP/2 for realistic modern traffic patterns |
-| Live Stats | P50/P99/RPS/errors updated every 2 seconds in the dashboard |
-
-### Observability
-| Component | Role |
-|---|---|
-| Prometheus | Scrapes all services via ServiceMonitor CRDs, 15-day retention |
-| Grafana | 6 pre-built dashboards: chaos overview, load test, SLO, K8s nodes, Kafka, security |
-| Loki | Structured JSON logs from all pods, S3 backend, 30-day retention |
-| Grafana Tempo | Distributed traces with trace-to-log correlation |
-| Alertmanager | Slack + email alerts with fast-burn (1h window) and slow-burn (6h window) SLO rules |
-| OTel Collector | Unified telemetry pipeline: traces → Tempo, metrics → Prometheus |
-
-### Security (10 components)
-| Component | What It Does |
-|---|---|
-| HashiCorp Vault | Dynamic DB credentials (1h TTL), K8s auth, 4 least-privilege policies, audit log |
-| OPA/Gatekeeper | 6 Rego policies: registry allowlist, non-root, no public services, resource limits |
-| Kyverno | 8 policies: require limits, disallow latest tag, mutate labels, read-only rootfs |
-| Falco | 7 custom rules, eBPF syscall monitoring, alerts via Falcosidekick → SNS |
-| Sealed Secrets | Asymmetrically encrypted secrets safe to commit to git |
-| cert-manager | Automatic TLS cert issuance via Let's Encrypt ACME |
-| IRSA | Pod-level AWS IAM via ServiceAccount annotation — no static credentials |
-| Dependency Track | CycloneDX SBOM ingestion, ongoing CVE monitoring for deployed images |
-| Network Policies | Namespace isolation, default-deny, explicit allow rules |
-| Pod Security | Non-root, read-only rootfs, no privilege escalation enforced by admission control |
-
-### CI/CD
-| Component | Role |
-|---|---|
-| GitHub Actions | 4 workflows: CI (build/test/scan), Release (tag + ECR push), IaC (Terraform plan/apply), Security (weekly Trivy scan) |
-| ArgoCD | App-of-Apps GitOps, sync waves for ordered deployment, drift detection |
-| Jenkins | Kubernetes-native agent pods, seed job DSL, nightly chaos test job |
-| Helmfile | Local dev bootstrap and ArgoCD pre-seeding |
-
-### Lambda Automation
-| Function | Trigger | What It Does |
-|---|---|---|
-| report-generator | S3 ObjectCreated, SNS | WeasyPrint PDF generation, S3 upload, presigned URL, Slack post |
-| slack-notifier | SNS subscription | Block Kit formatter for 4 event types, channel routing, SSM webhook |
-| experiment-scheduler | EventBridge cron 02:00 UTC Mon–Fri | DynamoDB scan, 23h cooldown, 3× exponential backoff retry |
 
 ---
 
 ## Tech Stack
 
-| Layer | Technology |
+| Tool | Role |
 |---|---|
-| Infrastructure | Terraform 1.7, AWS EKS 1.29, SPOT t3.medium nodes |
-| Networking | VPC 10.0.0.0/16, NAT Gateway, ALB Ingress, Network Policies |
-| Container Runtime | containerd, ECR, multi-stage Docker builds |
-| Backend | Python 3.11, FastAPI, asyncio, httpx[http2], kubernetes-client |
-| Frontend | React 18, Vite, Redux Toolkit, Recharts, WebSocket |
-| Streaming | Apache Kafka (MSK), SASL/SCRAM-SHA-512 |
-| Caching | Redis (ElastiCache), KEDA Redis queue trigger |
-| Database | PostgreSQL (RDS), DynamoDB (on-demand) |
-| Serverless | AWS Lambda Python 3.11, WeasyPrint layer, X-Ray tracing |
-| Events | SNS, EventBridge, S3 bucket notifications |
-| Metrics | Prometheus, Grafana, Alertmanager, kube-state-metrics, node-exporter |
-| Logs | Loki, Promtail, S3 backend |
-| Traces | Grafana Tempo, OpenTelemetry Collector, OTLP |
-| Secrets | HashiCorp Vault 1.15, SSM Parameter Store |
-| Policy | OPA/Gatekeeper, Kyverno, Pod Security Admission |
-| Security | Falco eBPF, Trivy, Dependency Track, Sealed Secrets |
-| TLS | cert-manager, Let's Encrypt ACME, ECDSA P-256 |
-| CD | ArgoCD 2.10, App-of-Apps, sync waves |
-| CI | GitHub Actions, Jenkins (K8s agent pods) |
-| Scaling | KEDA 2.13, HPA, Cluster Autoscaler |
+| Terraform | Provisions all AWS infrastructure: EKS, VPC, MSK, RDS, ElastiCache, S3, IAM |
+| AWS EKS | Managed Kubernetes cluster running all platform workloads |
+| Python 3.11 | Backend language for chaos engine, load tester, and target application |
+| FastAPI | REST API framework for the chaos engine and target application |
+| asyncio + httpx | Async HTTP client for concurrent load generation (HTTP/2 support) |
+| React 18 + Vite | Real-time dashboard with WebSocket-based live metric updates |
+| Redux Toolkit | Client-side state management for experiment and test state |
+| Recharts | Live metric charting in the dashboard |
+| Apache Kafka (MSK) | Ordered event streaming between chaos engine, dashboard, and observers |
+| Redis (ElastiCache) | Sub-second load test stat aggregation and KEDA queue trigger |
+| PostgreSQL (RDS) | Persistent experiment configuration storage |
+| DynamoDB | Experiment results and scheduled job state |
+| KEDA | Event-driven autoscaling for load tester worker pods (1 to 20 replicas) |
+| ArgoCD | GitOps continuous delivery with App-of-Apps pattern and sync waves |
+| GitHub Actions | CI pipelines: build, test, security scan, ECR push |
+| Jenkins | Kubernetes-native pipeline runner with seed job DSL |
+| Helmfile | Declarative multi-chart Helm release management |
+| Prometheus | Metrics collection via ServiceMonitor CRDs, 15-day retention |
+| Grafana | Six pre-built dashboards covering chaos, load test, SLO, and security |
+| Loki | Log aggregation with S3 backend and 30-day retention |
+| Grafana Tempo | Distributed tracing with trace-to-log correlation |
+| Alertmanager | SLO-based alerting with fast-burn and slow-burn rules |
+| OpenTelemetry Collector | Unified telemetry pipeline routing traces and metrics |
+| HashiCorp Vault | Dynamic database credentials, Kubernetes auth, audit logging |
+| OPA/Gatekeeper | Admission control with six Rego policies and unit tests |
+| Kyverno | Kubernetes-native policy engine for validation and mutation |
+| Falco | eBPF-based runtime security monitoring with custom rule set |
+| cert-manager | Automatic TLS certificate issuance via Let's Encrypt ACME |
+| Sealed Secrets | Asymmetric encryption for secrets safe to commit to git |
+| Dependency Track | Continuous SBOM ingestion and CVE monitoring |
+| AWS Lambda | Serverless report generation, Slack notification, experiment scheduling |
+| WeasyPrint | HTML-to-PDF rendering inside Lambda for experiment reports |
+| SNS + EventBridge | Event routing and cron-based experiment scheduling |
+| ECR | Private container image registry for all platform services |
+| IRSA | Pod-level AWS IAM via ServiceAccount annotation, no static credentials |
 
 ---
 
@@ -179,197 +112,159 @@ Run both together: steady load + chaos injection = the most realistic picture of
 ```
 chaos-platform/
 ├── terraform/
-│   ├── modules/                    # Reusable: vpc, eks, rds, msk, elasticache, ecr, s3, iam
-│   └── environments/dev/           # Dev: main.tf, variables.tf, outputs.tf, backend.tf
+│   ├── modules/            vpc, eks, rds, msk, elasticache, ecr, s3, iam
+│   └── environments/dev/   main.tf, variables.tf, outputs.tf, versions.tf
 │
 ├── apps/
-│   ├── target-app/                 # FastAPI e-commerce API (the system under test)
-│   ├── chaos-engine/               # Fault injection engine (pod-kill, network, cpu, memory)
-│   ├── load-tester/                # Load generation (ramp, spike, soak, breaking-point)
-│   └── dashboard/                  # React 18 + Vite real-time dashboard
+│   ├── target-app/         FastAPI e-commerce service (the system under test)
+│   ├── chaos-engine/       Fault injection engine: pod-kill, network-delay, cpu, memory
+│   ├── load-tester/        Load generation: ramp, spike, soak, breaking-point scenarios
+│   └── dashboard/          React 18 real-time dashboard
 │
 ├── k8s/
-│   ├── base/                       # Kustomize base manifests for all 4 services
-│   ├── overlays/dev/               # Dev patches (SPOT tolerations, resource limits)
-│   └── monitoring/                 # ServiceMonitors, PrometheusRules, Grafana dashboards
+│   ├── base/               Kustomize base manifests for all services
+│   ├── overlays/dev/       Environment-specific patches
+│   └── monitoring/         ServiceMonitors, PrometheusRules, Grafana dashboards
 │
 ├── helm/
-│   ├── helmfile.yaml               # Unified helmfile for all charts
-│   └── values/                     # Per-chart values files
+│   ├── helmfile.yaml       Unified release definitions for all Helm charts
+│   └── values/             Per-chart values files
 │
 ├── argocd/
-│   ├── apps/                       # App-of-Apps: one Application per service
-│   └── projects/                   # ArgoCD Projects with RBAC
+│   ├── apps/               App-of-Apps: one Application manifest per service
+│   └── projects/           ArgoCD Projects with RBAC constraints
 │
 ├── monitoring/
-│   ├── prometheus/                 # PrometheusRules: SLO alerts, chaos-specific rules
-│   ├── grafana/                    # 6 dashboard JSON definitions
-│   ├── loki/                       # Loki config + Promtail DaemonSet
-│   └── tempo/                      # Grafana Tempo deployment
+│   ├── prometheus/         SLO alert rules and chaos-specific recording rules
+│   ├── grafana/            Six dashboard JSON definitions
+│   ├── loki/               Loki configuration and Promtail DaemonSet
+│   └── tempo/              Grafana Tempo deployment
 │
 ├── security/
-│   ├── vault/                      # Vault StatefulSet, Raft config, 4 policies, scripts
-│   ├── opa/                        # 6 Rego policies + ConstraintTemplates + tests
-│   ├── kyverno/                    # 6 namespace policies + 2 ClusterPolicies
-│   ├── falco/                      # 7 custom rules + DaemonSet + eBPF loader
-│   ├── sealed-secrets/             # 3 example SealedSecrets + seal/verify scripts
-│   ├── cert-manager/               # 3 ClusterIssuers + 2 certificates
-│   ├── dependency-track/           # Deployment + SBOM upload/CVE check scripts
-│   └── docs/runbooks/              # 4 security runbooks (incident response, etc.)
+│   ├── vault/              StatefulSet, Raft config, four policies, operational scripts
+│   ├── opa/                Six Rego policies, ConstraintTemplates, unit tests
+│   ├── kyverno/            Six namespace policies, two ClusterPolicies
+│   ├── falco/              Seven custom rules, DaemonSet, eBPF driver loader
+│   ├── sealed-secrets/     Example SealedSecrets and seal/verify scripts
+│   ├── cert-manager/       ClusterIssuers and certificate resources
+│   └── dependency-track/   Deployment and SBOM upload scripts
 │
 ├── lambda/
-│   ├── report-generator/           # WeasyPrint PDF, S3 upload, presigned URL
-│   ├── slack-notifier/             # Block Kit formatter, 4 event types, channel routing
-│   ├── experiment-scheduler/       # DynamoDB scan, 23h cooldown, exponential backoff
-│   └── terraform/                  # IAM, EventBridge cron, SNS subscription, S3 trigger
+│   ├── report-generator/   WeasyPrint PDF generation, S3 upload, presigned URL
+│   ├── slack-notifier/     Block Kit formatter, channel routing, SSM webhook
+│   ├── experiment-scheduler/ DynamoDB scan, cooldown enforcement, retry logic
+│   └── terraform/          IAM roles, EventBridge rules, SNS subscriptions
 │
-├── .github/
-│   └── workflows/                  # CI, Release, IaC Terraform, Security scan
-│
-├── jenkins/
-│   ├── Jenkinsfile                 # Main pipeline: build → test → scan → push → deploy
-│   ├── jobs/                       # Seed job DSL, nightly chaos job
-│   └── k8s/                        # Jenkins StatefulSet + agent pod templates
+├── .github/workflows/      CI, Release, Terraform plan/apply, security scan
+├── jenkins/                Jenkinsfile, seed job DSL, Kubernetes agent pod templates
 │
 └── docs/
-    ├── architecture/               # README, ASCII diagram, data-flow, decision-log
-    ├── runbooks/                   # Getting started, chaos, load test, troubleshooting, cost
-    └── adr/                        # 5 Architecture Decision Records
+    ├── architecture/       System overview, ASCII diagram, data flow, decision log
+    ├── runbooks/           Getting started, chaos, load test, troubleshooting, cost
+    └── adr/                Five Architecture Decision Records
 ```
 
 ---
 
-## Quick Start (5 Commands)
+## How to Deploy
+
+### Prerequisites
+
+- AWS CLI v2 configured with admin credentials
+- Terraform 1.7 or later
+- kubectl 1.29 or later
+- Helm 3.14 and Helmfile 0.162
+- Docker 24 or later
+- ArgoCD CLI 2.10 or later
+
+### Step 1: Provision AWS Infrastructure
 
 ```bash
-# 1. Clone and configure
-git clone https://github.com/YOUR_USERNAME/chaos-platform.git
-cd chaos-platform/chaos-platform
+cd terraform/environments/dev
+terraform init
+terraform apply
+```
 
-# 2. Deploy AWS infrastructure (EKS, VPC, MSK, Redis, RDS)
-cd terraform/environments/dev && terraform init && terraform apply
+This creates the EKS cluster, VPC, MSK Kafka cluster, ElastiCache Redis, RDS PostgreSQL, S3 buckets, DynamoDB tables, and all IAM roles. Expect approximately 20 minutes.
 
-# 3. Bootstrap Kubernetes platform (ArgoCD + all services via GitOps)
+### Step 2: Configure kubectl
+
+```bash
 aws eks update-kubeconfig --region us-east-1 --name chaos-platform-dev
-./scripts/bootstrap.sh
-
-# 4. Initialize Vault (unseal + policies)
-./security/vault/scripts/init-vault.sh
-
-# 5. Open the dashboard
-kubectl port-forward svc/dashboard 8080:8080 -n chaos-platform &
-open http://localhost:8080
+kubectl cluster-info
 ```
 
-Full setup guide: [docs/runbooks/getting-started.md](docs/runbooks/getting-started.md)
-
----
-
-## Running Your First Experiment
+### Step 3: Bootstrap the Platform
 
 ```bash
-# Check the system is healthy first
-kubectl get pods -n chaos-platform
-
-# Run a pod-kill experiment with a 5% error rate hypothesis
-curl -X POST http://localhost:8001/experiments \
-  -H "Content-Type: application/json" \
-  -d '{
-    "type": "pod-kill",
-    "targetLabel": "app=target-app",
-    "blastRadius": 0.5,
-    "durationSeconds": 300,
-    "hypothesis": {"metric": "error_rate", "threshold": 0.05, "operator": "lt"}
-  }'
-
-# Watch in Grafana: http://localhost:3000
-# PDF report arrives in Slack #chaos-reports within 60 seconds of completion
+./scripts/bootstrap.sh
 ```
 
-Full guide: [docs/runbooks/running-chaos-experiment.md](docs/runbooks/running-chaos-experiment.md)
+The script installs ArgoCD via Helm, then creates the root App-of-Apps Application. ArgoCD takes over and deploys all remaining components in sync wave order: monitoring infrastructure first, then security components, then application workloads.
+
+### Step 4: Initialize Vault
+
+```bash
+./security/vault/scripts/init-vault.sh
+```
+
+Initialises Vault with a 5-of-3 Shamir key split, stores the unseal keys as a Kubernetes Secret, performs the initial unseal, and applies all four access policies.
+
+### Step 5: Build and Push Container Images
+
+```bash
+REGISTRY=$(aws ecr describe-repositories \
+  --query 'repositories[0].repositoryUri' --output text | cut -d/ -f1)
+aws ecr get-login-password | docker login --username AWS --password-stdin $REGISTRY
+
+for service in target-app chaos-engine load-tester dashboard; do
+  docker build -t $REGISTRY/$service:latest apps/$service/
+  docker push $REGISTRY/$service:latest
+done
+```
+
+### Step 6: Deploy Lambda Functions
+
+```bash
+cd lambda/terraform
+terraform init
+terraform apply \
+  -var="results_bucket=chaos-platform-dev-results" \
+  -var="reports_bucket=chaos-platform-dev-reports" \
+  -var="experiments_table=chaos-platform-experiments"
+```
+
+### Step 7: Verify
+
+```bash
+kubectl get applications -n argocd
+kubectl get pods --all-namespaces
+kubectl port-forward svc/dashboard 8080:8080 -n chaos-platform
+```
+
+Open http://localhost:8080 for the dashboard and http://localhost:3000 for Grafana (after port-forwarding that service separately).
+
+Full deployment reference: [docs/runbooks/getting-started.md](docs/runbooks/getting-started.md)
 
 ---
 
-## Screenshots
+## What This Project Demonstrates
 
-### Dashboard — Live Experiment View
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│  ⚡ Chaos Platform               [New Experiment] [New Load Test]   │
-├──────────────────────┬──────────────────────────────────────────────┤
-│  Active: exp-abc1234 │  Error Rate ──────────────────────────────   │
-│  Type: pod-kill      │  5% ┤                                        │
-│  Status: RUNNING     │  4% ┤                              ___       │
-│  Pods killed: 3/6    │  3% ┤                         ____/   \___   │
-│  Elapsed: 2:14       │  2% ┤      __________________/            \  │
-│  Hypothesis:         │  1% ┤_____/                                \ │
-│  error_rate < 5%     │  0% └────────────────────────────────────── │
-│                      │      0s      60s     120s     180s    240s   │
-└──────────────────────┴──────────────────────────────────────────────┘
-```
+**Infrastructure as Code**: The entire AWS environment is defined in Terraform using a modular structure. Each AWS service is an independent module with its own variables, outputs, and resource definitions. Remote state is stored in S3 with DynamoDB locking.
 
-### Grafana — Chaos Platform Overview
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│ Chaos Platform Overview                    Last 1h  [Refresh: 30s]  │
-├──────────────┬───────────────┬──────────────┬────────────────────────┤
-│ Error Rate   │ P99 Latency   │ Pod Count    │ Circuit Breaker        │
-│ 0.02%        │ 124ms         │ 6 / 6 Ready  │ CLOSED ✓               │
-├──────────────┴───────────────┴──────────────┴────────────────────────┤
-│  Experiments Run: 47  │  Pass Rate: 89%  │  Avg Recovery: 28s       │
-└──────────────────────────────────────────────────────────────────────┘
-```
+**Kubernetes and GitOps**: All workloads run on EKS and are managed exclusively through ArgoCD. No `kubectl apply` in the deployment path. Sync waves enforce deployment ordering across namespaces. Drift detection reverts any manual changes.
 
----
+**Distributed Systems Design**: The platform uses Kafka for ordered, replayable event streaming, Redis for sub-second metric aggregation, and a circuit breaker to halt chaos automatically if the system cannot recover. Partitioning by experiment ID ensures event ordering per experiment.
 
-## Build Log — 10 Phases
+**Observability**: Every service emits Prometheus metrics via ServiceMonitor CRDs, structured JSON logs collected by Promtail into Loki, and OpenTelemetry traces forwarded to Grafana Tempo. Six pre-built Grafana dashboards cover every layer of the platform.
 
-| Phase | What Was Built | Key Technologies |
-|---|---|---|
-| 1 | AWS infrastructure | Terraform, EKS, VPC, MSK, RDS, ElastiCache |
-| 2 | Helm + Helmfile + ArgoCD bootstrap | Helm 3, Helmfile, ArgoCD App-of-Apps |
-| 3 | Target app + chaos engine core | FastAPI, asyncio, kubernetes-client |
-| 4 | Chaos experiment types + Kafka | pod-kill, network-delay, cpu-stress, MSK |
-| 5 | Load tester + KEDA autoscaling | httpx, Redis, KEDA, HPA |
-| 6 | React dashboard | React 18, Vite, Redux Toolkit, WebSocket, Recharts |
-| 7 | CI/CD pipelines | GitHub Actions, Jenkins, ArgoCD GitOps |
-| 8 | Full observability stack | Prometheus, Grafana, Loki, Tempo, Alertmanager, OTel |
-| 9 | Security layer | Vault, OPA, Kyverno, Falco, Sealed Secrets, cert-manager |
-| 10 | Lambda automation + documentation | Lambda, WeasyPrint, SNS, EventBridge, this README |
+**Security Engineering**: Vault provides dynamic database credentials that expire after one hour. OPA and Kyverno enforce admission control policies at the Kubernetes API level. Falco monitors system calls at the kernel level using eBPF. All credentials are stored in Vault or AWS SSM; nothing is hardcoded.
 
----
+**Serverless and Event-Driven Architecture**: Three Lambda functions handle report generation, Slack notification routing, and scheduled experiment triggering. They are wired together via SNS, EventBridge, and S3 event notifications, with no polling or direct coupling.
 
-## What I Learned
+**CI/CD Pipelines**: GitHub Actions runs four workflow types (build and test, image release, Terraform plan, weekly security scan). Jenkins provides a Kubernetes-native pipeline runner with dynamically provisioned agent pods.
 
-Building this platform across 10 phases taught me things that blog posts don't cover:
-
-**GitOps is non-obvious to bootstrap.** ArgoCD is excellent for managing everything — except itself. Getting the chicken-and-egg right (bootstrapping ArgoCD before it can manage anything) took iterations. The `bootstrap.sh` script is the result.
-
-**Vault's operational burden is real.** Dynamic credentials are a genuine security improvement. But Vault needs to be initialized, unsealed after every pod restart, and monitored. In a production setup, I'd use KMS auto-unseal. The manual 3-of-5 Shamir process is appropriate for small teams with high-security requirements.
-
-**Running both OPA and Kyverno in Audit mode first saved a self-inflicted outage.** Two weeks of audit-only revealed that Falco's DaemonSet and the OTel Collector both needed privileges that the initial policies denied. If I'd gone straight to Enforce, they would never have deployed.
-
-**KEDA's Redis queue trigger makes the load tester elegant.** Instead of manually managing worker counts, the load tester publishes work to a Redis queue and KEDA handles the rest. This pattern is widely applicable.
-
-**Kafka partitioning by experimentId was non-obvious but important.** Without it, events for the same experiment could be processed by different consumers out of order, making the dashboard show nonsensical state transitions.
-
-**WeasyPrint in Lambda needs a custom layer.** The Python package itself is small but depends on libpango and libcairo which aren't available in the Lambda runtime. Building a Lambda layer with the native libraries took longer than expected.
-
-**Chaos engineering surfaced real weaknesses.** During development, the breaking-point load tests consistently showed that the target app's database connection pool exhausted before the HPA could spin up new pods. That's a real bug in the app, found before production.
-
----
-
-## Future Improvements
-
-1. **Argo Rollouts** — Canary deployments with automatic rollback on SLO violation. The chaos platform already measures error rates; feeding that signal into a rollout controller would make deployments self-healing.
-
-2. **GameDay Orchestration** — A higher-level workflow that runs a sequence of chaos experiments as a scheduled GameDay scenario, generates a single combined report, and tracks resilience trends over time.
-
-3. **Kubernetes Chaos Provider** — Currently the chaos engine uses the Kubernetes client library directly. Replacing the pod-kill implementation with Chaos Mesh or Litmus Chaos would add 20+ additional fault types (disk I/O, DNS failure, HTTP abort) without custom code.
-
-4. **Multi-Cluster** — The platform currently targets a single EKS cluster. Adding a second cluster and running cross-cluster chaos (e.g., failing the connection between clusters) would be a more realistic test of microservice architectures.
-
-5. **Automated Hypothesis Tuning** — After running 50+ experiments, the platform has enough data to suggest hypothesis thresholds statistically (e.g., "your p99 latency is normally 124ms; we suggest a chaos hypothesis of < 400ms based on 3× your typical variance").
+**Python Backend Engineering**: The chaos engine uses asyncio for concurrent fault injection across multiple pods. The load tester uses httpx with HTTP/2 support to maintain thousands of concurrent connections from a single process. Both services expose OpenAPI-documented REST APIs via FastAPI.
 
 ---
 
@@ -377,20 +272,21 @@ Building this platform across 10 phases taught me things that blog posts don't c
 
 | Document | Description |
 |---|---|
-| [Architecture Overview](docs/architecture/README.md) | Plain-English description of how all components work together |
-| [Architecture Diagram](docs/architecture/architecture-diagram.md) | Full ASCII diagram of every service and data flow |
-| [Data Flow](docs/architecture/data-flow.md) | Step-by-step walkthrough of experiment and load test flows |
-| [Decision Log](docs/architecture/decision-log.md) | Summary table of all 26 major technical decisions |
-| [Getting Started](docs/runbooks/getting-started.md) | Prerequisites, step-by-step setup, common errors |
-| [Running Chaos Experiments](docs/runbooks/running-chaos-experiment.md) | Dashboard + API, hypothesis evaluation, interpreting results |
-| [Running Load Tests](docs/runbooks/running-load-test.md) | All scenarios, live stats, breaking point analysis |
-| [Troubleshooting](docs/runbooks/troubleshooting.md) | 7 specific problems with exact diagnosis and fix commands |
-| [Cost Management](docs/runbooks/cost-management.md) | Cost breakdown, reduction strategies, billing alerts, teardown |
-| [ADR-001: Python](docs/adr/ADR-001-python-over-java.md) | Why Python over Go or Java |
-| [ADR-002: Kafka](docs/adr/ADR-002-kafka-over-sqs.md) | Why Kafka over SQS or EventBridge |
-| [ADR-003: ArgoCD](docs/adr/ADR-003-argocd-gitops.md) | Why GitOps over CI-driven Helm |
-| [ADR-004: Vault](docs/adr/ADR-004-vault-over-secrets-manager.md) | Why Vault over AWS Secrets Manager |
-| [ADR-005: OPA + Kyverno](docs/adr/ADR-005-kyverno-and-opa.md) | Why both admission controllers |
+| [Architecture Overview](docs/architecture/README.md) | Detailed description of every component and how they interconnect |
+| [Architecture Diagram](docs/architecture/architecture-diagram.md) | Full ASCII diagram with all services and data flows annotated |
+| [Data Flow](docs/architecture/data-flow.md) | Step-by-step trace of a chaos experiment and a load test from trigger to report |
+| [Decision Log](docs/architecture/decision-log.md) | Summary of all 26 major technical decisions with rationale |
+| [Getting Started](docs/runbooks/getting-started.md) | Full prerequisites, setup steps, and common error resolutions |
+| [Running Chaos Experiments](docs/runbooks/running-chaos-experiment.md) | Dashboard and API usage, hypothesis configuration, result interpretation |
+| [Running Load Tests](docs/runbooks/running-load-test.md) | Scenario types, live statistics, breaking point analysis |
+| [Troubleshooting](docs/runbooks/troubleshooting.md) | Seven common failure modes with diagnosis commands and resolution steps |
+| [Cost Management](docs/runbooks/cost-management.md) | Cost breakdown, reduction strategies, billing alerts, full teardown |
+| [ADR-001: Python](docs/adr/ADR-001-python-over-java.md) | Why Python over Go or Java for backend services |
+| [ADR-002: Kafka](docs/adr/ADR-002-kafka-over-sqs.md) | Why Kafka over SQS or EventBridge for event streaming |
+| [ADR-003: ArgoCD](docs/adr/ADR-003-argocd-gitops.md) | Why GitOps over CI-driven Helm upgrades |
+| [ADR-004: Vault](docs/adr/ADR-004-vault-over-secrets-manager.md) | Why HashiCorp Vault over AWS Secrets Manager |
+| [ADR-005: OPA and Kyverno](docs/adr/ADR-005-kyverno-and-opa.md) | Why both admission controllers are used together |
+| [Deployment Guide](DEPLOYMENT.md) | Step-by-step deployment, verification, and teardown reference |
 
 ---
 
@@ -398,7 +294,7 @@ Building this platform across 10 phases taught me things that blog posts don't c
 
 MIT License
 
-Copyright (c) 2026
+Copyright (c) 2025 Ankit
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
 
