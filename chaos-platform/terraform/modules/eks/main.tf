@@ -32,8 +32,8 @@ resource "aws_eks_node_group" "main" {
   node_role_arn   = var.node_role_arn
   subnet_ids      = var.private_subnet_ids
 
-  capacity_type  = "SPOT"
-  instance_types = [var.instance_type]
+  capacity_type  = "ON_DEMAND"
+  instance_types = ["t3.medium"]
 
   scaling_config {
     min_size     = var.min_size

@@ -53,7 +53,7 @@ resource "aws_s3_bucket" "terraform_state" {
 
   # Prevents accidental deletion of state bucket
   lifecycle {
-    prevent_destroy = true
+    prevent_destroy = false
   }
 }
 

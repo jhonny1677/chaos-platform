@@ -50,7 +50,7 @@ repositories:
     url: https://helm.releases.hashicorp.com
 
   - name: sealed-secrets
-    url: https://bitnami-labs.github.io/sealed-secrets
+    url: https://charts.bitnami.com/bitnami
 
   - name: bitnami
     url: https://charts.bitnami.com/bitnami    # used for the 'raw' chart (ClusterIssuer)
@@ -403,7 +403,7 @@ releases:
   # The controller holds the private key; only it can decrypt SealedSecrets.
   - name: sealed-secrets
     namespace: security
-    chart: sealed-secrets/sealed-secrets
+    chart: bitnami/sealed-secrets
     createNamespace: false
     values:
       - fullnameOverride: sealed-secrets-controller
