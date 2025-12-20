@@ -244,7 +244,7 @@ kubectl port-forward svc/dashboard 8080:8080 -n chaos-platform
 
 Open http://localhost:8080 for the dashboard and http://localhost:3000 for Grafana (after port-forwarding that service separately).
 
-Full deployment reference: [docs/runbooks/getting-started.md](docs/runbooks/getting-started.md)
+Full deployment reference: [docs/runbooks/getting-started.md](https://github.com/jhonny1677/chaos-platform/blob/main/chaos-platform/docs/runbooks/getting-started.md)
 
 ---
 
@@ -272,21 +272,21 @@ Full deployment reference: [docs/runbooks/getting-started.md](docs/runbooks/gett
 
 | Document | Description |
 |---|---|
-| [Architecture Overview](docs/architecture/README.md) | Detailed description of every component and how they interconnect |
-| [Architecture Diagram](docs/architecture/architecture-diagram.md) | Full ASCII diagram with all services and data flows annotated |
-| [Data Flow](docs/architecture/data-flow.md) | Step-by-step trace of a chaos experiment and a load test from trigger to report |
-| [Decision Log](docs/architecture/decision-log.md) | Summary of all 26 major technical decisions with rationale |
-| [Getting Started](docs/runbooks/getting-started.md) | Full prerequisites, setup steps, and common error resolutions |
-| [Running Chaos Experiments](docs/runbooks/running-chaos-experiment.md) | Dashboard and API usage, hypothesis configuration, result interpretation |
-| [Running Load Tests](docs/runbooks/running-load-test.md) | Scenario types, live statistics, breaking point analysis |
-| [Troubleshooting](docs/runbooks/troubleshooting.md) | Seven common failure modes with diagnosis commands and resolution steps |
-| [Cost Management](docs/runbooks/cost-management.md) | Cost breakdown, reduction strategies, billing alerts, full teardown |
-| [ADR-001: Python](docs/adr/ADR-001-python-over-java.md) | Why Python over Go or Java for backend services |
-| [ADR-002: Kafka](docs/adr/ADR-002-kafka-over-sqs.md) | Why Kafka over SQS or EventBridge for event streaming |
-| [ADR-003: ArgoCD](docs/adr/ADR-003-argocd-gitops.md) | Why GitOps over CI-driven Helm upgrades |
-| [ADR-004: Vault](docs/adr/ADR-004-vault-over-secrets-manager.md) | Why HashiCorp Vault over AWS Secrets Manager |
-| [ADR-005: OPA and Kyverno](docs/adr/ADR-005-kyverno-and-opa.md) | Why both admission controllers are used together |
-| [Deployment Guide](DEPLOYMENT.md) | Step-by-step deployment, verification, and teardown reference |
+| [Architecture Overview](https://github.com/jhonny1677/chaos-platform/blob/main/chaos-platform/docs/architecture/README.md) | Detailed description of every component and how they interconnect |
+| [Architecture Diagram](https://github.com/jhonny1677/chaos-platform/blob/main/chaos-platform/docs/architecture/architecture-diagram.md) | Full ASCII diagram with all services and data flows annotated |
+| [Data Flow](https://github.com/jhonny1677/chaos-platform/blob/main/chaos-platform/docs/architecture/data-flow.md) | Step-by-step trace of a chaos experiment and a load test from trigger to report |
+| [Decision Log](https://github.com/jhonny1677/chaos-platform/blob/main/chaos-platform/docs/architecture/decision-log.md) | Summary of all 26 major technical decisions with rationale |
+| [Getting Started](https://github.com/jhonny1677/chaos-platform/blob/main/chaos-platform/docs/runbooks/getting-started.md) | Full prerequisites, setup steps, and common error resolutions |
+| [Running Chaos Experiments](https://github.com/jhonny1677/chaos-platform/blob/main/chaos-platform/docs/runbooks/running-chaos-experiment.md) | Dashboard and API usage, hypothesis configuration, result interpretation |
+| [Running Load Tests](https://github.com/jhonny1677/chaos-platform/blob/main/chaos-platform/docs/runbooks/running-load-test.md) | Scenario types, live statistics, breaking point analysis |
+| [Troubleshooting](https://github.com/jhonny1677/chaos-platform/blob/main/chaos-platform/docs/runbooks/troubleshooting.md) | Seven common failure modes with diagnosis commands and resolution steps |
+| [Cost Management](https://github.com/jhonny1677/chaos-platform/blob/main/chaos-platform/docs/runbooks/cost-management.md) | Cost breakdown, reduction strategies, billing alerts, full teardown |
+| [ADR-001: Python](https://github.com/jhonny1677/chaos-platform/blob/main/chaos-platform/docs/adr/ADR-001-python-over-java.md) | Why Python over Go or Java for backend services |
+| [ADR-002: Kafka](https://github.com/jhonny1677/chaos-platform/blob/main/chaos-platform/docs/adr/ADR-002-kafka-over-sqs.md) | Why Kafka over SQS or EventBridge for event streaming |
+| [ADR-003: ArgoCD](https://github.com/jhonny1677/chaos-platform/blob/main/chaos-platform/docs/adr/ADR-003-argocd-gitops.md) | Why GitOps over CI-driven Helm upgrades |
+| [ADR-004: Vault](https://github.com/jhonny1677/chaos-platform/blob/main/chaos-platform/docs/adr/ADR-004-vault-over-secrets-manager.md) | Why HashiCorp Vault over AWS Secrets Manager |
+| [ADR-005: OPA and Kyverno](https://github.com/jhonny1677/chaos-platform/blob/main/chaos-platform/docs/adr/ADR-005-kyverno-and-opa.md) | Why both admission controllers are used together |
+| [Deployment Guide](https://github.com/jhonny1677/chaos-platform/blob/main/chaos-platform/DEPLOYMENT.md) | Step-by-step deployment, verification, and teardown reference |
 
 ---
 
